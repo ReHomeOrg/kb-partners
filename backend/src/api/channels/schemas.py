@@ -37,6 +37,17 @@ class ChannelConfigUpdate(BaseModel):
     is_active: bool | None = None
 
 
+class InboundEnvelope(BaseModel):
+    """Стандартный конверт входящего от партнёра (E5). Подпись/таймстемп — в заголовках."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    request_ref: str = Field(min_length=1, max_length=_MAX_ID)
+    status: str = Field(min_length=1, max_length=64)
+    nonce: str = Field(min_length=1, max_length=_MAX_ID)
+    message: str | None = Field(default=None, max_length=20_000)
+
+
 class ChannelConfigRead(BaseModel):
     """Представление конфигурации канала. БЕЗ `inbound_token` (секрет, не отдаём)."""
 

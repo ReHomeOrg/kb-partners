@@ -24,8 +24,9 @@ tags:
     description: Заявки-на-услугу (ServiceRequest) и их жизненный цикл.
   - name: Channels
     description: Конфигурация каналов доставки партнёров (admin).
+  - name: Inbound
+    description: Приём ответов партнёров (подписанные webhooks; токен + HMAC).
   # Доменные теги (следующие эпики):
-  # - name: Inbound         — приём ответов партнёров (webhook/bot/IMAP)
   # - name: Webhooks        — исходящие доменные события
 
 # Глобально все операции требуют Keycloak Bearer JWT (aud: kb-partners).
@@ -562,6 +563,68 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  # --- Входящие от партнёров (§11.3). Публичные: токен в пути + HMAC-подпись. ---
+  /api/v1/partners/inbound/api/{token}:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Inbound]
+      summary: Входящее от партнёра (подписанный webhook)
+      operationId: inboundApi
+      security: []  # аутентификация — токен в пути + HMAC-подпись, не JWT
+      parameters:
+        - name: X-Signature
+          in: header
+          required: true
+          schema:
+            type: string
+          description: HMAC-SHA256(`<X-Timestamp>.<body>`, inbound_token), hex.
+        - name: X-Timestamp
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Epoch-секунды; вне окна ±300с → 401 (replay-защита).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InboundEnvelope"
+      responses:
+        "200":
+          description: Принято (`ok`) либо дубль (`duplicate`).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [ok, duplicate]
+        "401":
+          description: Невалидная подпись или таймстемп.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Неизвестный токен либо заявка вне ведения партнёра.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Некорректное тело или неизвестный статус.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   # --- Каналы партнёров (§11.2, admin). ---
   /api/v1/partners/channels:
     get:
@@ -1063,6 +1126,28 @@ components:
     ChannelType:
       type: string
       enum: [API, CRM, TELEGRAM, MAX, EMAIL, MOCK]
+
+    InboundEnvelope:
+      description: Конверт входящего от партнёра (E5). Подпись/таймстемп — в заголовках.
+      type: object
+      required: [request_ref, status, nonce]
+      properties:
+        request_ref:
+          type: string
+          minLength: 1
+          maxLength: 255
+        status:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: accepted / rejected / in_progress / done.
+        nonce:
+          type: string
+          minLength: 1
+          maxLength: 255
+        message:
+          type: string
+          maxLength: 20000
 
     ChannelConfigCreate:
       description: Конфигурация канала партнёра. inbound_token — секрет, в выдаче не возвращается.

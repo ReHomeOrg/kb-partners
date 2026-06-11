@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.auth.dependencies import get_current_principal
 from api.auth.principal import Principal
 from api.channels.dispatch import DispatchService
+from api.channels.inbound import InboundService
 from api.channels.resolver import HttpChannelResolver
 from api.channels.service import ChannelConfigService
 from api.config import get_settings
@@ -31,3 +32,8 @@ def get_channel_service(session: AsyncSession = Depends(get_session)) -> Channel
 def get_dispatch_service(session: AsyncSession = Depends(get_session)) -> DispatchService:
     """Сервис диспетчеризации (E4): резолвер каналов из конфигурации."""
     return DispatchService(session, HttpChannelResolver(get_settings()))
+
+
+def get_inbound_service(session: AsyncSession = Depends(get_session)) -> InboundService:
+    """Сервис приёма входящих от партнёров (E5)."""
+    return InboundService(session)

@@ -114,6 +114,13 @@ def test_spec_declares_dispatch_operation(spec: dict[str, Any]) -> None:
     assert "post" in spec["paths"]["/api/v1/partners/requests/{request_id}/dispatch"]
 
 
+def test_spec_declares_inbound_operation(spec: dict[str, Any]) -> None:
+    # E5 (M3.3): подписанный webhook партнёра (публичный — security: []).
+    inbound = spec["paths"]["/api/v1/partners/inbound/api/{token}"]["post"]
+    assert inbound["security"] == []
+    assert "InboundEnvelope" in spec["components"]["schemas"]
+
+
 def test_spec_declares_channels_operations(spec: dict[str, Any]) -> None:
     # M3.2a: CRUD каналов (admin).
     paths = spec["paths"]

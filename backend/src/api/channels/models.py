@@ -93,3 +93,28 @@ class DispatchAttempt(Base):
         # Идемпотентность попытки: ключ уникален (повтор доставки не плодит запись).
         Index("uq_dispatch_attempts_idempotency_key", "idempotency_key", unique=True),
     )
+
+
+class InboundEvent(Base):
+    """Журнал принятых входящих от партнёра (E5) — дедуп/replay-защита по nonce."""
+
+    __tablename__ = "inbound_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    channel_config_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("partner_channel_configs.id"),
+        nullable=False,
+    )
+    nonce: Mapped[str] = mapped_column(String(255), nullable=False)
+    request_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
+    received_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        # Дедуп входящих: nonce уникален в пределах канала (replay → no-op).
+        UniqueConstraint("channel_config_id", "nonce", name="uq_inbound_events_channel_nonce"),
+    )

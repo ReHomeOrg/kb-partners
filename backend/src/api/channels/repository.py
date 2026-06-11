@@ -7,7 +7,32 @@ import uuid
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.channels.models import DispatchAttempt, PartnerChannelConfig
+from api.channels.models import (
+    DispatchAttempt,
+    InboundEvent,
+    PartnerChannelConfig,
+)
+
+
+class InboundRepository:
+    """Доступ к каналам по inbound-токену и журналу входящих (дедуп, E5)."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def config_by_inbound_token(self, token: str) -> PartnerChannelConfig | None:
+        stmt = select(PartnerChannelConfig).where(PartnerChannelConfig.inbound_token == token)
+        return (await self._session.execute(stmt)).scalar_one_or_none()
+
+    async def is_seen(self, channel_config_id: uuid.UUID, nonce: str) -> bool:
+        stmt = select(InboundEvent.id).where(
+            InboundEvent.channel_config_id == channel_config_id,
+            InboundEvent.nonce == nonce,
+        )
+        return (await self._session.execute(stmt)).first() is not None
+
+    def add_event(self, event: InboundEvent) -> None:
+        self._session.add(event)
 
 
 class DispatchRepository:
