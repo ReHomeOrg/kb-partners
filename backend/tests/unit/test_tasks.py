@@ -12,8 +12,10 @@ def test_broker_is_stub_without_url() -> None:
     assert isinstance(broker, StubBroker)  # пустой worker_broker_url → инертно
 
 
-def test_drain_actor_registered() -> None:
-    from api.tasks.actors import drain_outbox_dispatch
+def test_drain_actors_registered() -> None:
+    from api.tasks.actors import drain_outbox_dispatch, drain_outbox_on_create
 
     assert isinstance(drain_outbox_dispatch, dramatiq.Actor)
     assert drain_outbox_dispatch.actor_name == "drain_outbox_dispatch"
+    assert isinstance(drain_outbox_on_create, dramatiq.Actor)
+    assert drain_outbox_on_create.actor_name == "drain_outbox_on_create"

@@ -226,6 +226,24 @@ class Settings(BaseSettings):
     outbox_retry_base_seconds: float = Field(
         default=30.0, gt=0, description="База backoff повтора outbox (сек): base * 2**(attempt-1)."
     )
+    outbox_visibility_timeout_seconds: float = Field(
+        default=300.0,
+        gt=0,
+        description=(
+            "Видимость захваченного outbox-сообщения (сек): по истечении PROCESSING "
+            "снова доступно (reclaim осиротевших после сбоя воркера)."
+        ),
+    )
+
+    # --- Автоматизация (E6, §6.6, FR-6.3). On_create-пайплайн (классификация→подбор→
+    # диспетчеризация) асинхронно через outbox. ПУСТО/False → инертно (ручной режим). ---
+    automation_on_create_enabled: bool = Field(
+        default=False,
+        description=(
+            "Включает авто-пайплайн при приёме заявки (on_create): intake ставит "
+            "outbox-задачу, воркер прогоняет classify→assign→dispatch системным субъектом."
+        ),
+    )
 
 
 @lru_cache(maxsize=1)

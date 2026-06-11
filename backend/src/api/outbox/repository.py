@@ -30,18 +30,25 @@ class OutboxRepository:
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
     async def claim_batch(
-        self, *, kind: str, now: datetime.datetime, limit: int
+        self,
+        *,
+        kind: str,
+        now: datetime.datetime,
+        limit: int,
+        visibility_timeout: float = 300.0,
     ) -> list[OutboxMessage]:
-        """Захватить PENDING-сообщения готовые к обработке (FOR UPDATE SKIP LOCKED).
+        """Захватить готовые сообщения (FOR UPDATE SKIP LOCKED).
 
-        Помечает их PROCESSING и инкрементит attempts — конкурентные воркеры берут
-        непересекающиеся подмножества (single-delivery в пределах батча).
+        Берёт PENDING, а также PROCESSING с истёкшим visibility-окном (reclaim
+        осиротевших после сбоя воркера). Помечает PROCESSING, инкрементит attempts и
+        сдвигает `available_at` на visibility_timeout — конкурентные воркеры не
+        пересекаются (single-delivery в пределах окна).
         """
         stmt = (
             select(OutboxMessage)
             .where(
                 OutboxMessage.kind == kind,
-                OutboxMessage.status == OutboxStatus.PENDING,
+                OutboxMessage.status.in_([OutboxStatus.PENDING, OutboxStatus.PROCESSING]),
                 OutboxMessage.available_at <= now,
             )
             .order_by(OutboxMessage.available_at.asc())
@@ -49,9 +56,11 @@ class OutboxRepository:
             .with_for_update(skip_locked=True)
         )
         rows = list((await self._session.execute(stmt)).scalars().all())
+        reclaim_at = now + datetime.timedelta(seconds=visibility_timeout)
         for row in rows:
             row.status = OutboxStatus.PROCESSING
             row.attempts += 1
+            row.available_at = reclaim_at
         return rows
 
     @staticmethod

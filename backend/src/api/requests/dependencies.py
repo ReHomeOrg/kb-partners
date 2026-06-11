@@ -52,8 +52,8 @@ async def require_service_principal(
 
 
 def get_intake_service(session: AsyncSession = Depends(get_session)) -> IntakeService:
-    """Сервис приёма заявок на сессию запроса."""
-    return IntakeService(session)
+    """Сервис приёма заявок на сессию запроса (с гейтом авто-пайплайна)."""
+    return IntakeService(session, automation_on_create=get_settings().automation_on_create_enabled)
 
 
 def get_request_service(session: AsyncSession = Depends(get_session)) -> RequestService:

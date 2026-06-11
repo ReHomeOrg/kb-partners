@@ -29,6 +29,7 @@ from api.errors import ProblemException
 from api.matching.engine import Matcher
 from api.observability.logging import get_logger
 from api.observability.pii_mask import mask_pii
+from api.outbox.repository import OutboxRepository
 from api.requests.access import (
     can_cancel,
     can_drive_lifecycle,
@@ -163,9 +164,10 @@ def build_detail(principal: Principal, request: ServiceRequest) -> RequestDetail
 class IntakeService:
     """Создание заявок из каналов приёма E1. Возвращает `(заявка, создана?)`."""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, *, automation_on_create: bool = False) -> None:
         self._session = session
         self._repo = RequestRepository(session)
+        self._automation_on_create = automation_on_create
 
     async def create_from_form(
         self, principal: Principal, body: RequestCreate, idempotency_key: str | None
@@ -290,6 +292,11 @@ class IntakeService:
                 to_value=RequestStatus.NEW.value,
             )
         )
+        if self._automation_on_create:
+            # Атомарно с созданием заявки ставим задачу авто-пайплайна (E6, FR-6.3).
+            OutboxRepository(self._session).enqueue(
+                "automation_on_create", {"request_id": str(request.id)}
+            )
         await self._session.commit()
         _logger.info(
             "request intake created: number=%s channel=%s status=%s",
