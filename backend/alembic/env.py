@@ -19,9 +19,10 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-# --- Регистрация доменных моделей (side-effect import) появится здесь в M1+:
-# import api.requests.models  # noqa: F401
-# import api.channels.models   # noqa: F401
+# --- Регистрация доменных моделей (side-effect import) для autogenerate.
+# Каждый доменный пакет регистрирует свои таблицы в Base.metadata здесь.
+import api.requests.models  # noqa: F401
+# import api.channels.models   # noqa: F401 (M3)
 # ...
 from api.config import get_settings
 from api.db.base import Base
