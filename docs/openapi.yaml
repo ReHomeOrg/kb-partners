@@ -1,0 +1,97 @@
+openapi: 3.1.0
+info:
+  title: kb-partners API
+  version: 0.1.0
+  description: >-
+    Модуль обработки партнёрских заявок reHome (ТЗ v1.1). Contract-first:
+    эта спецификация — источник истины для контрактных тестов (AT-002).
+    На M0 (каркас) определены только инфраструктурные эндпоинты; доменные
+    пути (/requests, /channels, /inbound, /webhooks) добавляются по эпикам
+    M1–M7 под префиксом /api/v1/partners.
+  contact:
+    name: ООО РЕХОМ
+
+servers:
+  - url: https://api.rehome.one
+    description: Production
+  - url: https://staging-api.rehome.one
+    description: Staging
+
+tags:
+  - name: Infrastructure
+    description: Liveness/readiness/metrics пробы (без префикса /api/v1).
+  # Доменные теги (M1+):
+  # - name: Requests        — заявки-на-услугу (ServiceRequest) и их жизненный цикл
+  # - name: Channels        — конфигурация каналов доставки партнёров
+  # - name: Inbound         — приём ответов партнёров (webhook/bot/IMAP)
+  # - name: Webhooks        — исходящие доменные события
+
+paths:
+  /healthz:
+    get:
+      tags: [Infrastructure]
+      summary: Liveness probe
+      operationId: healthz
+      responses:
+        "200":
+          description: Процесс жив.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Healthz"
+
+  /readyz:
+    get:
+      tags: [Infrastructure]
+      summary: Readiness probe
+      operationId: readyz
+      responses:
+        "200":
+          description: Готов к трафику (БД доступна; redis — мягкий статус).
+        "503":
+          description: Не готов (БД недоступна).
+
+  /metrics:
+    get:
+      tags: [Infrastructure]
+      summary: Prometheus metrics
+      operationId: metrics
+      responses:
+        "200":
+          description: Метрики в формате Prometheus exposition.
+          content:
+            text/plain:
+              schema:
+                type: string
+
+components:
+  schemas:
+    Healthz:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+      additionalProperties: false
+
+    Error:
+      description: RFC 7807 problem+json (без ПДн в detail).
+      type: object
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        errors:
+          type: array
+          items:
+            type: object
+            additionalProperties:
+              type: string
