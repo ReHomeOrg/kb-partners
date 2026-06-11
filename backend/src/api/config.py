@@ -217,6 +217,15 @@ class Settings(BaseSettings):
             "Read-side вычисления (breach на чтении) от него не зависят."
         ),
     )
+    outbox_batch_size: int = Field(
+        default=50, ge=1, le=500, description="Сколько outbox-сообщений берёт дрейнер за раз."
+    )
+    outbox_max_attempts: int = Field(
+        default=5, ge=1, le=20, description="Попыток обработки outbox-сообщения до FAILED."
+    )
+    outbox_retry_base_seconds: float = Field(
+        default=30.0, gt=0, description="База backoff повтора outbox (сек): base * 2**(attempt-1)."
+    )
 
 
 @lru_cache(maxsize=1)
