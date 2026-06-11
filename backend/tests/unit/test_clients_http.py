@@ -242,6 +242,28 @@ async def test_create_service_order_malformed_json_degrades(noop_sleep: SleepFn)
     assert ref is None
 
 
+async def test_get_partner_contact_maps(noop_sleep: SleepFn) -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        assert req.url.path.endswith("/c-1/contact")
+        assert req.headers["authorization"] == "Bearer tok"
+        return httpx.Response(200, json={"phone": "+79001112233", "email": "c@example.com"})
+
+    contact = await _platform(handler, noop_sleep).get_partner_contact(partner_id="c-1")
+    assert contact is not None
+    assert contact.phone == "+79001112233"
+    assert contact.email == "c@example.com"
+
+
+async def test_get_partner_contact_degrades_on_404(noop_sleep: SleepFn) -> None:
+    client = _platform(lambda req: httpx.Response(404), noop_sleep)
+    assert await client.get_partner_contact(partner_id="c-1") is None
+
+
+async def test_get_partner_contact_degrades_on_5xx(noop_sleep: SleepFn) -> None:
+    client = _platform(lambda req: httpx.Response(503), noop_sleep)
+    assert await client.get_partner_contact(partner_id="c-1") is None
+
+
 def test_factory_builds_resilient_client() -> None:
     from api.clients.factory import build_resilient_client
     from api.config import Settings

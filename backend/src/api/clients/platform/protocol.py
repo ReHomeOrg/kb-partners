@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from api.clients.platform.models import CollaboratorCandidate, ServiceOrderRef
+from api.clients.platform.models import CollaboratorCandidate, PartnerContact, ServiceOrderRef
 
 
 @runtime_checkable
@@ -18,6 +18,10 @@ class PlatformClient(Protocol):
         self, *, category: str, service_area: str | None = None
     ) -> list[CollaboratorCandidate]:
         """Кандидаты-партнёры реестра по категории (+ гео). `[]` при недоступности."""
+        ...
+
+    async def get_partner_contact(self, *, partner_id: str) -> PartnerContact | None:
+        """Контакт партнёра для уведомлений (E8, FR-8.2). `None` при недоступности/4xx."""
         ...
 
     async def create_service_order(

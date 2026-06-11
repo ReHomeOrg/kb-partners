@@ -25,16 +25,22 @@ def emit_notifications(
     request_id: uuid.UUID,
     number: str,
     status: RequestStatus,
+    requester_id: str,
+    partner_id: str | None = None,
 ) -> None:
     """Поставить уведомления о входе заявки в `status` (если уведомления включены).
 
     Одно outbox-сообщение на адресата (заявитель/партнёр/оператор), payload — без
-    ПДн: id/номер заявки, статус, адресат-роль, нейтральная RU-сводка.
+    ПДн: id/номер заявки, статус, адресат-роль, нейтральная RU-сводка + непрозрачные
+    ссылки requester_id/partner_id (для резолва КОНТАКТА на дрейне, контакт в outbox
+    не кладём). partner-уведомления без `partner_id` пропускаются (некого уведомлять).
     """
     if not get_settings().notifications_enabled:
         return
     repo = OutboxRepository(session)
     for notification in notifications_for(status):
+        if notification.audience is NotifyAudience.PARTNER and not partner_id:
+            continue
         repo.enqueue(
             NOTIFICATION_KIND,
             {
@@ -43,6 +49,8 @@ def emit_notifications(
                 "number": number,
                 "status": status.value,
                 "summary": notification.summary,
+                "requester_id": requester_id,
+                "partner_id": partner_id,
             },
         )
 

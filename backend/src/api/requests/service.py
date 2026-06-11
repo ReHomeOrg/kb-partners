@@ -130,7 +130,14 @@ def apply_transition(
         status=target,
     )
     # Уведомления заявителю/партнёру/оператору (E8, FR-8.1/8.2) — если включены.
-    emit_notifications(session, request_id=request.id, number=request.number, status=target)
+    emit_notifications(
+        session,
+        request_id=request.id,
+        number=request.number,
+        status=target,
+        requester_id=request.requester_id,
+        partner_id=request.partner_id,
+    )
 
 
 def build_detail(principal: Principal, request: ServiceRequest) -> RequestDetail:
@@ -327,6 +334,7 @@ class IntakeService:
             request_id=request.id,
             number=request.number,
             status=RequestStatus.NEW,
+            requester_id=request.requester_id,
         )
         await self._session.commit()
         _logger.info(

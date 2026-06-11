@@ -24,9 +24,11 @@ from api.clients.auth import StaticTokenProvider
 from api.clients.cache import InMemoryCache
 from api.clients.factory import build_resilient_client
 from api.clients.platform.adapter import HttpPlatformClient
+from api.clients.rehome.adapter import HttpRehomeOneClient
 from api.config import Settings, get_settings
 from api.db import async_session_factory
 from api.matching.engine import Matcher
+from api.notifications.contacts import NeighborContactResolver
 from api.notifications.drainer import drain_notification_batch
 from api.observability.logging import get_logger
 from api.retention.worker import anonymize_expired_raw_input
@@ -117,8 +119,27 @@ def drain_outbox_webhook() -> None:
 
 async def _drain_notifications() -> int:
     settings = get_settings()
-    async with async_session_factory() as session:
-        return await drain_notification_batch(session, settings=settings)
+    async with (
+        httpx.AsyncClient(
+            base_url=settings.platform_api_base_url, timeout=settings.client_timeout_seconds
+        ) as platform_http,
+        httpx.AsyncClient(
+            base_url=settings.rehome_one_api_base_url, timeout=settings.client_timeout_seconds
+        ) as rehome_http,
+        async_session_factory() as session,
+    ):
+        platform = HttpPlatformClient(
+            http_client=build_resilient_client("platform", platform_http, settings),
+            token_provider=StaticTokenProvider(settings.platform_api_token),
+            cache=InMemoryCache(now=time.monotonic),
+            cache_ttl_seconds=settings.platform_cache_ttl_seconds,
+        )
+        rehome = HttpRehomeOneClient(
+            http_client=build_resilient_client("rehome", rehome_http, settings),
+            token_provider=StaticTokenProvider(settings.rehome_one_api_token),
+        )
+        resolver = NeighborContactResolver(rehome=rehome, platform=platform, settings=settings)
+        return await drain_notification_batch(session, settings=settings, resolver=resolver)
 
 
 @dramatiq.actor(max_retries=0)

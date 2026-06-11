@@ -22,7 +22,7 @@ from api.channels.protocol import (
 )
 from api.classifier.engine import ClassifierEngine
 from api.classifier.provider import NullLLMProvider
-from api.clients.platform.models import CollaboratorCandidate, ServiceOrderRef
+from api.clients.platform.models import CollaboratorCandidate, PartnerContact, ServiceOrderRef
 from api.config import Settings
 from api.matching.engine import Matcher
 from api.outbox.models import OutboxMessage
@@ -72,6 +72,9 @@ class _FakePlatform:
         self, *, request_id: str, partner_id: str, category: str, idempotency_key: str
     ) -> ServiceOrderRef | None:
         return ServiceOrderRef(id="so-1", status="DRAFT")
+
+    async def get_partner_contact(self, *, partner_id: str) -> PartnerContact | None:
+        return None
 
 
 def _candidate(cid: str) -> CollaboratorCandidate:

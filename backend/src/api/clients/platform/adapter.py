@@ -17,7 +17,7 @@ from api.clients.auth import TokenProvider
 from api.clients.base import ResilientHttpClient
 from api.clients.cache import Cache
 from api.clients.errors import ExternalServiceError
-from api.clients.platform.models import CollaboratorCandidate, ServiceOrderRef
+from api.clients.platform.models import CollaboratorCandidate, PartnerContact, ServiceOrderRef
 from api.observability.logging import get_logger
 
 _logger = get_logger("clients.platform")
@@ -77,6 +77,39 @@ class HttpPlatformClient:
                 # не роняя весь подбор (деградация поэлементно).
                 _logger.warning("platform search_candidates: skipped malformed candidate")
         return candidates
+
+    async def get_partner_contact(self, *, partner_id: str) -> PartnerContact | None:
+        """Контакт партнёра для уведомлений (E8, FR-8.2). НЕ кешируется (ПДн), не логируем.
+
+        Деградация: недоступность/4xx/битый JSON → None (вызывающий пропускает канал).
+        """
+        token = await self._token_provider.get_token()
+        headers = {"Authorization": f"Bearer {token}"}
+        try:
+            response = await self._http.request(
+                "GET",
+                f"{_CANDIDATES_PATH}/{partner_id}/contact",
+                operation="get_partner_contact",
+                headers=headers,
+            )
+        except ExternalServiceError as exc:
+            _logger.warning("platform get_partner_contact degraded: %s", type(exc).__name__)
+            return None
+        if response.status_code >= 400:
+            _logger.warning(
+                "platform get_partner_contact degraded: status=%d", response.status_code
+            )
+            return None
+        try:
+            payload: dict[str, Any] = response.json()
+        except (ValueError, json.JSONDecodeError):
+            _logger.warning("platform get_partner_contact degraded: malformed JSON")
+            return None
+        phone = payload.get("phone")
+        email = payload.get("email")
+        return PartnerContact(
+            phone=str(phone) if phone else None, email=str(email) if email else None
+        )
 
     async def create_service_order(
         self, *, request_id: str, partner_id: str, category: str, idempotency_key: str

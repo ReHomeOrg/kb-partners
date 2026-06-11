@@ -23,6 +23,17 @@ class ServiceOrderRef:
 
 
 @dataclass(frozen=True)
+class PartnerContact:
+    """Контакт партнёра для уведомлений (E8, FR-8.2). ПДн — не логируем, не кешируем.
+
+    Резолвится на дрейне уведомлений по `collaborator_id`; в outbox не хранится.
+    """
+
+    phone: str | None = None
+    email: str | None = None
+
+
+@dataclass(frozen=True)
 class CollaboratorCandidate:
     """Кандидат-партнёр для подбора (FR-3.1). Поля — то, что нужно ранжированию.
 

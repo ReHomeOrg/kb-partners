@@ -280,13 +280,27 @@ class Settings(BaseSettings):
         ),
     )
     notify_push_token: str = Field(
-        default="", description="Креденшл push-провайдера. ПУСТО → push-seam инертен."
+        default="", description="Креденшл push-провайдера (web-push VAPID — ADR-0003a/M11)."
     )
-    notify_sms_token: str = Field(
-        default="", description="Креденшл SMS-шлюза (РФ). ПУСТО → SMS-seam инертен."
+    # SMS — боевой провайдер SMS.ru (ADR-0004). Свой HTTP-адаптер, без SDK. ПУСТОЙ
+    # api_id → SMS-канал инертен. Секрет — ссылкой на kb-vault.
+    sms_ru_api_id: str = Field(default="", description="Api-ID SMS.ru. ПУСТО → SMS-канал инертен.")
+    sms_ru_api_base_url: str = Field(
+        default="https://sms.ru", description="Базовый URL SMS.ru API."
     )
+    # Email — боевой SMTP в РФ (ADR-0004). ПУСТОЙ host → email-канал инертен.
     notify_smtp_host: str = Field(
-        default="", description="SMTP-хост уведомлений (РФ). ПУСТО → email-seam инертен."
+        default="", description="SMTP-хост уведомлений (РФ). ПУСТО → email-канал инертен."
+    )
+    notify_smtp_port: int = Field(default=587, ge=1, le=65535, description="SMTP-порт (STARTTLS).")
+    notify_smtp_user: str = Field(default="", description="SMTP-логин (ссылка на kb-vault).")
+    notify_smtp_password: str = Field(default="", description="SMTP-пароль (ссылка на kb-vault).")
+    notify_email_from: str = Field(
+        default="", description="From-адрес уведомлений. ПУСТО → email-канал инертен."
+    )
+    notify_operator_email: str = Field(
+        default="",
+        description="Email оператора для эскалаций (FR-4.5/9.4). ПУСТО → эскалация-email инертна.",
     )
 
     # --- Автоматизация (E6, §6.6, FR-6.3). On_create-пайплайн (классификация→подбор→

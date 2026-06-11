@@ -3,9 +3,21 @@
 from __future__ import annotations
 
 import uuid
+from email.message import EmailMessage
 
+import httpx
+
+from api.clients.platform.models import CollaboratorCandidate, PartnerContact, ServiceOrderRef
+from api.clients.rehome.models import RequesterContext, SettlementRef
 from api.config import Settings
-from api.notifications.channels import NotificationNotice, maybe_email, maybe_push, maybe_sms
+from api.notifications.channels import (
+    NotificationNotice,
+    Recipient,
+    send_email,
+    send_push,
+    send_sms,
+)
+from api.notifications.contacts import NeighborContactResolver
 from api.notifications.drainer import deliver_notification
 from api.notifications.events import NotifyAudience, notifications_for
 from api.requests.enums import RequestStatus
@@ -52,20 +64,100 @@ def test_intermediate_statuses_have_no_audience() -> None:
     assert notifications_for(RequestStatus.MATCHING) == []
 
 
-def test_channels_inert_until_configured() -> None:
-    # По умолчанию seam'ы выключены — попытка доставки не выполняется.
+async def test_channels_inert_until_configured() -> None:
+    # По умолчанию каналы выключены — доставка не выполняется (нет кредов/контакта).
     off = Settings()
     notice = _notice()
-    assert maybe_push(notice, off) is False
-    assert maybe_sms(notice, off) is False
-    assert maybe_email(notice, off) is False
-    assert deliver_notification(notice, off) == 0
+    assert await send_sms(notice, "+79001112233", off) is False
+    assert await send_email(notice, "u@example.com", off) is False
+    assert send_push(notice, off) is False
+    assert await deliver_notification(notice, Recipient(phone="+7", email="u@e.com"), off) == 0
 
 
-def test_channels_attempt_when_configured() -> None:
-    on = Settings(notify_push_token="t", notify_sms_token="t", notify_smtp_host="smtp.local")
+async def test_sms_ru_delivers_when_configured() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params.get("api_id") == "id"
+        assert request.url.params.get("to") == "+79001112233"
+        return httpx.Response(200, json={"status": "OK", "status_code": 100})
+
+    settings = Settings(sms_ru_api_id="id")
     notice = _notice()
-    assert maybe_push(notice, on) is True
-    assert maybe_sms(notice, on) is True
-    assert maybe_email(notice, on) is True
-    assert deliver_notification(notice, on) == 3
+    ok = await send_sms(notice, "+79001112233", settings, transport=httpx.MockTransport(handler))
+    assert ok is True
+
+
+async def test_sms_ru_non_ok_status_is_false() -> None:
+    transport = httpx.MockTransport(lambda r: httpx.Response(200, json={"status": "ERROR"}))
+    ok = await send_sms(_notice(), "+7", Settings(sms_ru_api_id="id"), transport=transport)
+    assert ok is False
+
+
+async def test_email_smtp_sends_via_injected_sender() -> None:
+    sent: list[str] = []
+
+    def fake_smtp(message: EmailMessage, settings: Settings) -> None:
+        sent.append(str(message["Subject"]))
+
+    settings = Settings(notify_smtp_host="smtp.local", notify_email_from="no-reply@rehome.one")
+    ok = await send_email(_notice(), "u@example.com", settings, sender=fake_smtp)
+    assert ok is True and sent and "RQ-1" in sent[0]
+
+
+# --- ContactResolver (резолв ПДн-контакта по адресату) --------------------
+
+
+class _FakeRehome:
+    async def trigger_settlement(self, **kwargs: object) -> SettlementRef | None:
+        return None
+
+    async def get_requester_context(self, **kwargs: object) -> RequesterContext | None:
+        return RequesterContext(user_phone="+79990001122", user_email="user@example.com")
+
+
+class _FakePlatform:
+    async def search_candidates(self, **kwargs: object) -> list[CollaboratorCandidate]:
+        return []
+
+    async def create_service_order(self, **kwargs: object) -> ServiceOrderRef | None:
+        return None
+
+    async def get_partner_contact(self, *, partner_id: str) -> PartnerContact | None:
+        return PartnerContact(phone="+78887776655", email="partner@example.com")
+
+
+def _resolver(settings: Settings) -> NeighborContactResolver:
+    return NeighborContactResolver(
+        rehome=_FakeRehome(), platform=_FakePlatform(), settings=settings
+    )
+
+
+async def test_resolver_user_contact_from_rehome() -> None:
+    notice = NotificationNotice(
+        request_id=uuid.uuid4(),
+        number="RQ-1",
+        audience=NotifyAudience.USER,
+        summary="x",
+        requester_id="u-1",
+    )
+    rec = await _resolver(Settings()).resolve(notice)
+    assert rec.phone == "+79990001122" and rec.email == "user@example.com"
+
+
+async def test_resolver_partner_contact_from_platform() -> None:
+    notice = NotificationNotice(
+        request_id=uuid.uuid4(),
+        number="RQ-1",
+        audience=NotifyAudience.PARTNER,
+        summary="x",
+        partner_id="c-1",
+    )
+    rec = await _resolver(Settings()).resolve(notice)
+    assert rec.phone == "+78887776655" and rec.email == "partner@example.com"
+
+
+async def test_resolver_operator_uses_config_email() -> None:
+    notice = NotificationNotice(
+        request_id=uuid.uuid4(), number="RQ-1", audience=NotifyAudience.OPERATOR, summary="x"
+    )
+    rec = await _resolver(Settings(notify_operator_email="ops@rehome.one")).resolve(notice)
+    assert rec.email == "ops@rehome.one" and rec.phone is None

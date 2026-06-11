@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.principal import Principal, PrincipalKind
-from api.clients.platform.models import CollaboratorCandidate, ServiceOrderRef
+from api.clients.platform.models import CollaboratorCandidate, PartnerContact, ServiceOrderRef
 from api.main import app
 from api.matching.engine import Matcher
 from api.requests.dependencies import get_assignment_service
@@ -48,6 +48,9 @@ class _FakePlatformClient:
         self, *, request_id: str, partner_id: str, category: str, idempotency_key: str
     ) -> ServiceOrderRef | None:
         return self._order_ref
+
+    async def get_partner_contact(self, *, partner_id: str) -> PartnerContact | None:
+        return None
 
 
 def _candidate(
