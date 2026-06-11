@@ -41,3 +41,23 @@ def test_healthz_response_matches_schema(spec: dict[str, Any], client: TestClien
 def test_error_schema_is_valid(spec: dict[str, Any]) -> None:
     schema = spec["components"]["schemas"]["Error"]
     Draft202012Validator.check_schema(schema)
+
+
+def test_spec_declares_intake_operations(spec: dict[str, Any]) -> None:
+    # E1 intake (M1.2): три пути приёма под префиксом /api/v1/partners.
+    for path in (
+        "/api/v1/partners/requests",
+        "/api/v1/partners/requests/from-chat",
+        "/api/v1/partners/requests/from-ticket",
+    ):
+        assert path in spec["paths"], f"missing path {path}"
+        assert "post" in spec["paths"][path]
+
+
+def test_intake_schemas_are_valid(spec: dict[str, Any]) -> None:
+    schemas = spec["components"]["schemas"]
+    for name in ("RequestCreate", "FromChatCreate", "FromTicketCreate", "RequestRead"):
+        assert name in schemas, f"missing schema {name}"
+        Draft202012Validator.check_schema(schemas[name])
+    # RequestRead не отдаёт ПДн-поле raw_input наружу (FR-1.6).
+    assert "raw_input" not in schemas["RequestRead"]["properties"]

@@ -20,11 +20,17 @@ servers:
 tags:
   - name: Infrastructure
     description: Liveness/readiness/metrics пробы (без префикса /api/v1).
-  # Доменные теги (M1+):
-  # - name: Requests        — заявки-на-услугу (ServiceRequest) и их жизненный цикл
+  - name: Requests
+    description: Заявки-на-услугу (ServiceRequest) и их жизненный цикл.
+  # Доменные теги (следующие эпики):
   # - name: Channels        — конфигурация каналов доставки партнёров
   # - name: Inbound         — приём ответов партнёров (webhook/bot/IMAP)
   # - name: Webhooks        — исходящие доменные события
+
+# Глобально все операции требуют Keycloak Bearer JWT (aud: kb-partners).
+# Публичные инфраструктурные пробы переопределяют это пустым `security: []`.
+security:
+  - bearerAuth: []
 
 paths:
   /healthz:
@@ -32,6 +38,7 @@ paths:
       tags: [Infrastructure]
       summary: Liveness probe
       operationId: healthz
+      security: []  # публичная проба (k8s liveness)
       responses:
         "200":
           description: Процесс жив.
@@ -45,6 +52,7 @@ paths:
       tags: [Infrastructure]
       summary: Readiness probe
       operationId: readyz
+      security: []  # публичная проба (k8s readiness)
       responses:
         "200":
           description: Готов к трафику (БД доступна; redis — мягкий статус).
@@ -56,6 +64,7 @@ paths:
       tags: [Infrastructure]
       summary: Prometheus metrics
       operationId: metrics
+      security: []  # внутренний scrape Prometheus
       responses:
         "200":
           description: Метрики в формате Prometheus exposition.
@@ -64,7 +73,125 @@ paths:
               schema:
                 type: string
 
+  # --- Заявки (E1 intake, веха M1.2). Префикс /api/v1/partners. ---
+  /api/v1/partners/requests:
+    post:
+      tags: [Requests]
+      summary: Приём заявки (ЛК-форма / m2m)
+      operationId: createRequest
+      description: >-
+        FR-1.1/FR-1.4. `channel_in` выводится бэкендом из типа субъекта (не из тела).
+        Идемпотентность — по заголовку `Idempotency-Key`.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+          description: Ключ дедупликации приёма; повтор возвращает существующую заявку (200).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RequestCreate"
+      responses:
+        "201":
+          description: Заявка создана.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestRead"
+        "200":
+          description: Идемпотентный повтор — существующая заявка.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestRead"
+        "401":
+          description: Не аутентифицирован.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Ошибка валидации тела.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/partners/requests/from-chat:
+    post:
+      tags: [Requests]
+      summary: Приём заявки из AI-чата (kb-search, SERVICE-only)
+      operationId: createRequestFromChat
+      description: FR-1.2. Только сервис-принципал (m2m). Идемпотентность по `chat_session_id`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FromChatCreate"
+      responses:
+        "201":
+          description: Заявка создана.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestRead"
+        "200":
+          description: Идемпотентный повтор — существующая заявка.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestRead"
+        "403":
+          description: Требуется сервис-принципал.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/partners/requests/from-ticket:
+    post:
+      tags: [Requests]
+      summary: Эскалация заявки из тикета (kb-support, SERVICE-only)
+      operationId: createRequestFromTicket
+      description: FR-1.3. Только сервис-принципал (m2m). Идемпотентность по `ticket_id`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FromTicketCreate"
+      responses:
+        "201":
+          description: Заявка создана.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestRead"
+        "200":
+          description: Идемпотентный повтор — существующая заявка.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestRead"
+        "403":
+          description: Требуется сервис-принципал.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Keycloak RS256 Bearer JWT (aud содержит `kb-partners`).
   schemas:
     Healthz:
       type: object
@@ -95,3 +222,139 @@ components:
             type: object
             additionalProperties:
               type: string
+
+    # --- Заявки (E1) ---
+    ChannelIn:
+      type: string
+      enum: [WEB_FORM, AI_CHAT, SUPPORT_TICKET, API, MESSENGER_INBOUND]
+
+    Category:
+      type: string
+      enum: [CLEANING, MOVING, REPAIR, KEY_DELIVERY, OTHER]
+
+    RequestStatus:
+      type: string
+      enum:
+        [
+          NEW,
+          CLASSIFYING,
+          CLASSIFIED,
+          NEEDS_REVIEW,
+          MATCHING,
+          ASSIGNED,
+          DISPATCHED,
+          FAILED_DISPATCH,
+          ACCEPTED,
+          IN_PROGRESS,
+          DONE,
+          ACCEPTED_BY_USER,
+          DISPUTE,
+          PAID,
+          CANCELLED,
+          REJECTED,
+        ]
+
+    RequestCreate:
+      description: >-
+        Тело приёма из ЛК-формы / m2m. `channel_in` НЕ принимается (выводится
+        бэкендом); `raw_input` маскируется до логов/LLM (FR-1.6).
+      type: object
+      additionalProperties: false
+      required: [raw_input]
+      properties:
+        raw_input:
+          type: string
+          minLength: 1
+          maxLength: 20000
+        requester_id:
+          type: string
+          maxLength: 255
+        booking_id:
+          type: string
+          maxLength: 255
+        premises_id:
+          type: string
+          maxLength: 255
+        source_ref:
+          type: object
+          additionalProperties: true
+
+    FromChatCreate:
+      description: Тело инициации из AI-чата (kb-search). Идемпотентность по chat_session_id.
+      type: object
+      additionalProperties: false
+      required: [chat_session_id, requester_id, raw_input]
+      properties:
+        chat_session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+        requester_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+        raw_input:
+          type: string
+          minLength: 1
+          maxLength: 20000
+        transcript:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        booking_id:
+          type: string
+          maxLength: 255
+        premises_id:
+          type: string
+          maxLength: 255
+
+    FromTicketCreate:
+      description: Тело эскалации из тикета (kb-support). Идемпотентность по ticket_id.
+      type: object
+      additionalProperties: false
+      required: [ticket_id, requester_id, raw_input]
+      properties:
+        ticket_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+        requester_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+        raw_input:
+          type: string
+          minLength: 1
+          maxLength: 20000
+        booking_id:
+          type: string
+          maxLength: 255
+        premises_id:
+          type: string
+          maxLength: 255
+
+    RequestRead:
+      description: Представление заявки наружу. Без raw_input (ПДн, FR-1.6/NFR-5).
+      type: object
+      additionalProperties: false
+      required: [id, number, requester_id, channel_in, category, status, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        number:
+          type: string
+        requester_id:
+          type: string
+        channel_in:
+          $ref: "#/components/schemas/ChannelIn"
+        category:
+          oneOf:
+            - $ref: "#/components/schemas/Category"
+            - type: "null"
+        status:
+          $ref: "#/components/schemas/RequestStatus"
+        created_at:
+          type: string
+          format: date-time
