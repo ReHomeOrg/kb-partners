@@ -41,6 +41,7 @@ from api.requests.schemas import (
     RequestDetail,
     RequestListResponse,
     RequestRead,
+    SettlementConfirm,
     TransitionRequest,
 )
 from api.requests.service import (
@@ -240,6 +241,21 @@ async def dispute_request(
 ) -> RequestDetail:
     """FR-7.2: DONE|ACCEPTED_BY_USER→DISPUTE + претензия COMPENSATION в kb-support (claim_ref)."""
     return await service.dispute(principal, request_id, body.reason)
+
+
+@router.post(
+    "/{request_id}/settlement",
+    response_model=RequestDetail,
+    summary="Подтверждение расчёта контуром (SERVICE-only)",
+)
+async def confirm_settlement(
+    request_id: uuid.UUID,
+    body: SettlementConfirm,
+    principal: Principal = Depends(require_service_principal),
+    service: AcceptanceService = Depends(get_acceptance_service),
+) -> RequestDetail:
+    """FR-7.3: платёжный контур rehome.one подтверждает расчёт → ACCEPTED_BY_USER→PAID."""
+    return await service.confirm_settlement(principal, request_id, body)
 
 
 @router.post(

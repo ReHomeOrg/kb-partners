@@ -23,6 +23,7 @@ from api.clients.auth import StaticTokenProvider
 from api.clients.cache import InMemoryCache
 from api.clients.factory import build_resilient_client
 from api.clients.platform.adapter import HttpPlatformClient
+from api.clients.rehome.adapter import HttpRehomeOneClient
 from api.clients.support.adapter import HttpKbSupportClient
 from api.config import get_settings
 from api.db import get_session
@@ -102,14 +103,29 @@ async def get_acceptance_service(
 ) -> AsyncIterator[AcceptanceService]:
     """Сервис приёмки/спора (E7): клиент kb-support (claims), config-gated."""
     settings = get_settings()
-    async with httpx.AsyncClient(
-        base_url=settings.kb_support_api_base_url, timeout=settings.client_timeout_seconds
-    ) as http:
+    async with (
+        httpx.AsyncClient(
+            base_url=settings.kb_support_api_base_url, timeout=settings.client_timeout_seconds
+        ) as support_http,
+        httpx.AsyncClient(
+            base_url=settings.rehome_one_api_base_url, timeout=settings.client_timeout_seconds
+        ) as rehome_http,
+    ):
         support = HttpKbSupportClient(
-            http_client=build_resilient_client("kb_support", http, settings),
+            http_client=build_resilient_client("kb_support", support_http, settings),
             token_provider=StaticTokenProvider(settings.kb_support_api_token),
         )
-        yield AcceptanceService(session, support, enable_claims=bool(settings.kb_support_api_token))
+        rehome = HttpRehomeOneClient(
+            http_client=build_resilient_client("rehome_one", rehome_http, settings),
+            token_provider=StaticTokenProvider(settings.rehome_one_api_token),
+        )
+        yield AcceptanceService(
+            session,
+            support,
+            rehome,
+            enable_claims=bool(settings.kb_support_api_token),
+            enable_settlement=bool(settings.rehome_one_api_token),
+        )
 
 
 def get_list_filters(

@@ -126,6 +126,12 @@ def test_spec_declares_acceptance_operations(spec: dict[str, Any]) -> None:
     assert {"claim_ref", "dispute_id", "amount_ref", "escrow_ref"} <= set(detail)
 
 
+def test_spec_declares_settlement_operation(spec: dict[str, Any]) -> None:
+    # E7 (M5.1b): подтверждение расчёта → PAID (SERVICE).
+    assert "post" in spec["paths"]["/api/v1/partners/requests/{request_id}/settlement"]
+    assert "SettlementConfirm" in spec["components"]["schemas"]
+
+
 def test_spec_declares_inbound_operation(spec: dict[str, Any]) -> None:
     # E5 (M3.3): подписанный webhook партнёра (публичный — security: []).
     inbound = spec["paths"]["/api/v1/partners/inbound/api/{token}"]["post"]

@@ -180,6 +180,15 @@ class DisputeRequest(BaseModel):
     reason: str = Field(min_length=1, max_length=_MAX_MESSAGE)
 
 
+class SettlementConfirm(BaseModel):
+    """Тело `POST /requests/{id}/settlement` — подтверждение расчёта контуром (FR-7.3)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    amount_ref: str | None = Field(default=None, max_length=_MAX_ID)
+    escrow_ref: str | None = Field(default=None, max_length=_MAX_ID)
+
+
 class AssignRequest(BaseModel):
     """Тело `POST /requests/{id}/assign` (§11.1, E3).
 

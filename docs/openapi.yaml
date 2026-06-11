@@ -546,6 +546,53 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /api/v1/partners/requests/{request_id}/settlement:
+    parameters:
+      - name: request_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Requests]
+      summary: Подтверждение расчёта контуром (SERVICE-only)
+      operationId: confirmSettlement
+      description: >-
+        FR-7.3. Платёжный контур rehome.one подтверждает расчёт →
+        ACCEPTED_BY_USER→PAID. Деньги модуль не считает — хранит ссылки.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SettlementConfirm"
+      responses:
+        "200":
+          description: Заявка оплачена (PAID).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestDetail"
+        "403":
+          description: Требуется сервис-принципал.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Заявка не найдена.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Расчёт недопустим в текущем статусе.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /api/v1/partners/requests/{request_id}/dispatch:
     parameters:
       - name: request_id
@@ -1230,6 +1277,18 @@ components:
           type: string
           minLength: 1
           maxLength: 20000
+
+    SettlementConfirm:
+      description: Подтверждение расчёта платёжным контуром (FR-7.3). Только ссылки.
+      type: object
+      additionalProperties: false
+      properties:
+        amount_ref:
+          type: string
+          maxLength: 255
+        escrow_ref:
+          type: string
+          maxLength: 255
 
     RequestListResponse:
       description: Страница списка заявок + курсор следующей страницы (или null).
