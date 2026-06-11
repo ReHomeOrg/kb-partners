@@ -62,6 +62,7 @@ from api.requests.schemas import (
     TransitionRequest,
 )
 from api.sla.engine import SlaPolicy, sla_view
+from api.webhooks.emitter import emit_event, status_event
 
 _logger = get_logger("requests.intake")
 
@@ -118,6 +119,14 @@ def apply_transition(
         created_at=request.created_at,
         dispatched_at=request.dispatched_at,
         accepted_at=request.accepted_at,
+    )
+    # Доменное событие в outbox (доставка после commit, E8) — если webhooks включены.
+    emit_event(
+        session,
+        event=status_event(target),
+        request_id=request.id,
+        number=request.number,
+        status=target,
     )
 
 
@@ -301,6 +310,13 @@ class IntakeService:
             OutboxRepository(self._session).enqueue(
                 "automation_on_create", {"request_id": str(request.id)}
             )
+        emit_event(
+            self._session,
+            event="request.created",
+            request_id=request.id,
+            number=request.number,
+            status=RequestStatus.NEW,
+        )
         await self._session.commit()
         _logger.info(
             "request intake created: number=%s channel=%s status=%s",

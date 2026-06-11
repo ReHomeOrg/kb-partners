@@ -28,6 +28,8 @@ from api.matching.engine import Matcher
 from api.observability.logging import get_logger
 from api.sla.engine import SlaPolicy
 from api.tasks.broker import broker  # noqa: F401 — импорт устанавливает брокер
+from api.webhooks.client import WebhookClient
+from api.webhooks.drainer import drain_webhook_batch
 
 _logger = get_logger("tasks.outbox")
 
@@ -85,3 +87,24 @@ def drain_outbox_on_create() -> None:
     """Прогнать on_create-пайплайн по поставленным задачам автоматизации (E6)."""
     processed = asyncio.run(_drain_on_create())
     _logger.info("outbox on_create drain: processed=%d", processed)
+
+
+async def _drain_webhooks() -> int:
+    settings = get_settings()
+    async with (
+        httpx.AsyncClient(timeout=settings.client_timeout_seconds) as http,
+        async_session_factory() as session,
+    ):
+        client = WebhookClient(
+            build_resilient_client("webhook", http, settings),
+            url=settings.webhook_url,
+            secret=settings.webhook_secret,
+        )
+        return await drain_webhook_batch(session, client, settings=settings)
+
+
+@dramatiq.actor(max_retries=0)
+def drain_outbox_webhook() -> None:
+    """Доставить исходящие webhooks подписчику (E8, после commit)."""
+    processed = asyncio.run(_drain_webhooks())
+    _logger.info("outbox webhook drain: processed=%d", processed)

@@ -235,6 +235,15 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- Исходящие webhooks (E8, §11.4). Доставка ПОСЛЕ commit через transactional
+    # outbox; HMAC-подпись. ПУСТОЙ webhook_url → эмиссия событий выключена. ---
+    webhook_url: str = Field(
+        default="", description="URL подписчика доменных событий. ПУСТО → webhooks off."
+    )
+    webhook_secret: str = Field(
+        default="", description="Секрет HMAC-подписи исходящих webhooks (X-Signature)."
+    )
+
     # --- Автоматизация (E6, §6.6, FR-6.3). On_create-пайплайн (классификация→подбор→
     # диспетчеризация) асинхронно через outbox. ПУСТО/False → инертно (ручной режим). ---
     automation_on_create_enabled: bool = Field(

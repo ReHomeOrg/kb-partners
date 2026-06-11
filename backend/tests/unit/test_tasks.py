@@ -13,9 +13,16 @@ def test_broker_is_stub_without_url() -> None:
 
 
 def test_drain_actors_registered() -> None:
-    from api.tasks.actors import drain_outbox_dispatch, drain_outbox_on_create
+    from api.tasks.actors import (
+        drain_outbox_dispatch,
+        drain_outbox_on_create,
+        drain_outbox_webhook,
+    )
 
-    assert isinstance(drain_outbox_dispatch, dramatiq.Actor)
-    assert drain_outbox_dispatch.actor_name == "drain_outbox_dispatch"
-    assert isinstance(drain_outbox_on_create, dramatiq.Actor)
-    assert drain_outbox_on_create.actor_name == "drain_outbox_on_create"
+    for actor, name in (
+        (drain_outbox_dispatch, "drain_outbox_dispatch"),
+        (drain_outbox_on_create, "drain_outbox_on_create"),
+        (drain_outbox_webhook, "drain_outbox_webhook"),
+    ):
+        assert isinstance(actor, dramatiq.Actor)
+        assert actor.actor_name == name
