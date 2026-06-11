@@ -18,7 +18,9 @@ from api.auth.dependencies import get_current_principal
 from api.auth.principal import Principal
 from api.channels.dependencies import get_dispatch_service
 from api.channels.dispatch import DispatchService
+from api.requests.acceptance import AcceptanceService
 from api.requests.dependencies import (
+    get_acceptance_service,
     get_assignment_service,
     get_classification_service,
     get_intake_service,
@@ -30,6 +32,7 @@ from api.requests.repository import RequestListFilters
 from api.requests.schemas import (
     AssignRequest,
     CancelRequest,
+    DisputeRequest,
     FromChatCreate,
     FromTicketCreate,
     MessageCreate,
@@ -208,6 +211,35 @@ async def dispatch_request(
     """E4: доставка по каналу с наивысшим priority; fallback по цепочке; исчерпание →
     FAILED_DISPATCH. Невидимая → 404; нет прав → 403; статус не ASSIGNED → 409."""
     return await service.dispatch(principal, request_id)
+
+
+@router.post(
+    "/{request_id}/accept",
+    response_model=RequestDetail,
+    summary="Приёмка пользователем",
+)
+async def accept_request(
+    request_id: uuid.UUID,
+    principal: Principal = Depends(get_current_principal),
+    service: AcceptanceService = Depends(get_acceptance_service),
+) -> RequestDetail:
+    """FR-7.1: DONE→ACCEPTED_BY_USER. Партнёру недоступно (403); не DONE → 409; чужая → 404."""
+    return await service.accept(principal, request_id)
+
+
+@router.post(
+    "/{request_id}/dispute",
+    response_model=RequestDetail,
+    summary="Открыть спор (с причиной)",
+)
+async def dispute_request(
+    request_id: uuid.UUID,
+    body: DisputeRequest,
+    principal: Principal = Depends(get_current_principal),
+    service: AcceptanceService = Depends(get_acceptance_service),
+) -> RequestDetail:
+    """FR-7.2: DONE|ACCEPTED_BY_USER→DISPUTE + претензия COMPENSATION в kb-support (claim_ref)."""
+    return await service.dispute(principal, request_id, body.reason)
 
 
 @router.post(

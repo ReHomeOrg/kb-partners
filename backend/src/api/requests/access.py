@@ -74,3 +74,8 @@ def can_drive_lifecycle(principal: Principal) -> bool:
 def can_cancel(principal: Principal) -> bool:
     """Отмена доступна пользователю/оператору/агенту, но не партнёру-исполнителю (§11.1)."""
     return not principal.is_partner
+
+
+def can_user_action(principal: Principal) -> bool:
+    """Приёмка/спор — действия пользователя/оператора (FR-7.1/7.2), не партнёра."""
+    return not principal.is_partner

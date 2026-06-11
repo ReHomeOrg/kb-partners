@@ -114,6 +114,18 @@ def test_spec_declares_dispatch_operation(spec: dict[str, Any]) -> None:
     assert "post" in spec["paths"]["/api/v1/partners/requests/{request_id}/dispatch"]
 
 
+def test_spec_declares_acceptance_operations(spec: dict[str, Any]) -> None:
+    # E7 (M5.1a): приёмка + спор.
+    paths = spec["paths"]
+    assert "post" in paths["/api/v1/partners/requests/{request_id}/accept"]
+    assert "post" in paths["/api/v1/partners/requests/{request_id}/dispute"]
+    schemas = spec["components"]["schemas"]
+    assert "DisputeRequest" in schemas
+    Draft202012Validator.check_schema(schemas["DisputeRequest"])
+    detail = schemas["RequestDetail"]["properties"]
+    assert {"claim_ref", "dispute_id", "amount_ref", "escrow_ref"} <= set(detail)
+
+
 def test_spec_declares_inbound_operation(spec: dict[str, Any]) -> None:
     # E5 (M3.3): подписанный webhook партнёра (публичный — security: []).
     inbound = spec["paths"]["/api/v1/partners/inbound/api/{token}"]["post"]

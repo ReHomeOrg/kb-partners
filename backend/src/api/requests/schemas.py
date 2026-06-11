@@ -103,6 +103,10 @@ class RequestDetail(RequestRead):
     premises_id: str | None
     delivery_channel: str | None
     service_order_id: str | None
+    amount_ref: str | None
+    escrow_ref: str | None
+    dispute_id: str | None
+    claim_ref: str | None
     updated_at: datetime.datetime
     raw_input: str
     classification: dict[str, Any] | None
@@ -162,6 +166,14 @@ class TransitionRequest(BaseModel):
 
 class CancelRequest(BaseModel):
     """Тело `POST /requests/{id}/cancel` — отмена с обязательной причиной (§11.1)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(min_length=1, max_length=_MAX_MESSAGE)
+
+
+class DisputeRequest(BaseModel):
+    """Тело `POST /requests/{id}/dispute` — открыть спор с причиной (FR-7.2)."""
 
     model_config = ConfigDict(extra="forbid")
 

@@ -23,10 +23,12 @@ from api.clients.auth import StaticTokenProvider
 from api.clients.cache import InMemoryCache
 from api.clients.factory import build_resilient_client
 from api.clients.platform.adapter import HttpPlatformClient
+from api.clients.support.adapter import HttpKbSupportClient
 from api.config import get_settings
 from api.db import get_session
 from api.errors import ProblemException
 from api.matching.engine import Matcher
+from api.requests.acceptance import AcceptanceService
 from api.requests.enums import Category, RequestStatus
 from api.requests.repository import RequestListFilters
 from api.requests.service import (
@@ -93,6 +95,21 @@ async def get_assignment_service(
             Matcher(),
             require_service_order=bool(settings.platform_api_token),
         )
+
+
+async def get_acceptance_service(
+    session: AsyncSession = Depends(get_session),
+) -> AsyncIterator[AcceptanceService]:
+    """Сервис приёмки/спора (E7): клиент kb-support (claims), config-gated."""
+    settings = get_settings()
+    async with httpx.AsyncClient(
+        base_url=settings.kb_support_api_base_url, timeout=settings.client_timeout_seconds
+    ) as http:
+        support = HttpKbSupportClient(
+            http_client=build_resilient_client("kb_support", http, settings),
+            token_provider=StaticTokenProvider(settings.kb_support_api_token),
+        )
+        yield AcceptanceService(session, support, enable_claims=bool(settings.kb_support_api_token))
 
 
 def get_list_filters(

@@ -460,6 +460,92 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /api/v1/partners/requests/{request_id}/accept:
+    parameters:
+      - name: request_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Requests]
+      summary: Приёмка пользователем
+      operationId: acceptRequest
+      description: FR-7.1. DONE→ACCEPTED_BY_USER. Партнёру недоступно (403); не DONE → 409.
+      responses:
+        "200":
+          description: Заявка принята пользователем.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestDetail"
+        "403":
+          description: Действие недоступно субъекту.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Заявка не найдена или недоступна.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Приёмка недопустима в текущем статусе.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/partners/requests/{request_id}/dispute:
+    parameters:
+      - name: request_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Requests]
+      summary: Открыть спор (с причиной)
+      operationId: disputeRequest
+      description: >-
+        FR-7.2. DONE|ACCEPTED_BY_USER→DISPUTE; при сконфигурированном контуре
+        порождает претензию COMPENSATION в kb-support (claim_ref).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DisputeRequest"
+      responses:
+        "200":
+          description: Спор открыт.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestDetail"
+        "403":
+          description: Действие недоступно субъекту.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Заявка не найдена или недоступна.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Спор недопустим в текущем статусе.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /api/v1/partners/requests/{request_id}/dispatch:
     parameters:
       - name: request_id
@@ -930,6 +1016,10 @@ components:
           premises_id,
           delivery_channel,
           service_order_id,
+          amount_ref,
+          escrow_ref,
+          dispute_id,
+          claim_ref,
           updated_at,
           raw_input,
           classification,
@@ -978,6 +1068,22 @@ components:
             - type: string
             - type: "null"
         service_order_id:
+          oneOf:
+            - type: string
+            - type: "null"
+        amount_ref:
+          oneOf:
+            - type: string
+            - type: "null"
+        escrow_ref:
+          oneOf:
+            - type: string
+            - type: "null"
+        dispute_id:
+          oneOf:
+            - type: string
+            - type: "null"
+        claim_ref:
           oneOf:
             - type: string
             - type: "null"
@@ -1105,6 +1211,17 @@ components:
 
     CancelRequest:
       description: Отмена заявки с обязательной причиной.
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 20000
+
+    DisputeRequest:
+      description: Открытие спора с обязательной причиной (FR-7.2).
       type: object
       additionalProperties: false
       required: [reason]
