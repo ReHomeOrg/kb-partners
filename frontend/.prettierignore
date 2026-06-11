@@ -1,0 +1,4 @@
+# Сгенерированные артефакты
+.next/
+node_modules/
+lib/api/schema.d.ts
