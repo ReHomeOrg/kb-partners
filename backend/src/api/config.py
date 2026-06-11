@@ -226,6 +226,13 @@ class Settings(BaseSettings):
         default="https://botapi.max.ru",
         description="Базовый URL MAX Bot API [ДОПУЩЕНИЕ §16.10 — сверить].",
     )
+    # IMAP-парсер входящих email-ответов партнёра (E5, §9.2, в РФ-контуре). ПУСТОЙ
+    # imap_host → poll инертен. Креды — ссылкой на kb-vault.
+    imap_host: str = Field(default="", description="IMAP-хост (IMAP4_SSL). ПУСТО → poll инертен.")
+    imap_port: int = Field(default=993, ge=1, le=65535, description="IMAP-порт (SSL).")
+    imap_user: str = Field(default="", description="IMAP-логин (ссылка на kb-vault).")
+    imap_password: str = Field(default="", description="IMAP-пароль (ссылка на kb-vault).")
+    imap_mailbox: str = Field(default="INBOX", description="IMAP-папка для опроса.")
 
     # --- SLA (E6, §16 п.3). Бизнес-часы недельного графика + IANA-TZ (DST-корректно,
     # FR-6.1). Дедлайны/breach считаются на чтении и переходах БЕЗ воркера (FR-6.2).

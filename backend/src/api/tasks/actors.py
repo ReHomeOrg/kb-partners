@@ -17,6 +17,7 @@ from api.automation.autonomy import parse_autonomy
 from api.automation.pipeline import AutomationDeps, drain_on_create_batch
 from api.automation.timers import drain_partner_fallback_batch, scan_accept_timeouts
 from api.channels.dispatch import drain_dispatch_batch
+from api.channels.email_inbound import EmailInboundService, ImaplibFetcher
 from api.channels.resolver import HttpChannelResolver
 from api.classifier.engine import ClassifierEngine
 from api.classifier.yandexgpt import build_llm_provider
@@ -202,3 +203,23 @@ def run_retention() -> None:
     """Ретенция ПДн (NFR-12): обезличить просроченный raw_input."""
     processed = asyncio.run(_run_retention())
     _logger.info("retention anonymize: processed=%d", processed)
+
+
+async def _poll_email_inbound() -> int:
+    settings = get_settings()
+    # Сетевой IMAP-fetch блокирующий → в тред; обработка писем — в БД-сессии.
+    messages = await asyncio.to_thread(ImaplibFetcher(settings).fetch_unseen)
+    processed = 0
+    policy = SlaPolicy.from_settings(settings)
+    for message in messages:
+        async with async_session_factory() as session:
+            await EmailInboundService(session, policy=policy).handle(message)
+            processed += 1
+    return processed
+
+
+@dramatiq.actor(max_retries=0)
+def poll_email_inbound() -> None:
+    """IMAP-опрос входящих ответов партнёра по email (E5). Инертно без imap_host."""
+    processed = asyncio.run(_poll_email_inbound())
+    _logger.info("email inbound poll: processed=%d", processed)
