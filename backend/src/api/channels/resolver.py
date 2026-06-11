@@ -15,6 +15,7 @@ from typing import Protocol
 import httpx
 
 from api.channels.adapters.bot import MaxChannel, TelegramChannel
+from api.channels.adapters.crm import AmoCrmChannel, Bitrix24Channel
 from api.channels.adapters.email import EmailChannel
 from api.channels.adapters.mock import MockChannel
 from api.channels.adapters.partner_api import PartnerApiChannel
@@ -65,6 +66,8 @@ class HttpChannelResolver:
             return self._bot(self._settings.max_api_base_url, ChannelType.MAX)
         if config.channel_type is ChannelType.EMAIL:
             return self._email()
+        if config.channel_type is ChannelType.CRM:
+            return self._crm(config)
         raise NotImplementedError(f"channel {config.channel_type.value} requires an ADR")
 
     @contextlib.asynccontextmanager
@@ -75,6 +78,20 @@ class HttpChannelResolver:
     async def _email(self) -> AsyncIterator[DeliveryChannel]:
         """EmailChannel — SMTP (без httpx); креды/from из настроек."""
         yield EmailChannel(self._settings)
+
+    @contextlib.asynccontextmanager
+    async def _crm(self, config: PartnerChannelConfig) -> AsyncIterator[DeliveryChannel]:
+        """CRM — Bitrix24/amoCRM по `crm_type`; base/секреты — в config канала."""
+        endpoint = str(config.config.get("endpoint", ""))
+        crm_type = str(config.config.get("crm_type", "")).lower()
+        async with httpx.AsyncClient(
+            base_url=endpoint, timeout=self._settings.client_timeout_seconds
+        ) as http:
+            resilient = build_resilient_client(f"crm_{crm_type or 'unknown'}", http, self._settings)
+            if crm_type == "amocrm":
+                yield AmoCrmChannel(resilient)
+            else:  # bitrix24 — дефолт самой распространённой РФ-CRM
+                yield Bitrix24Channel(resilient)
 
     @contextlib.asynccontextmanager
     async def _bot(

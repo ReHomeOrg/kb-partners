@@ -1,9 +1,10 @@
-"""Юнит-тесты HttpChannelResolver (§9.2): MOCK/API строятся, неподдержанные → ADR."""
+"""Юнит-тесты HttpChannelResolver (§9.2): все боевые каналы строятся по типу."""
 
 from __future__ import annotations
 
-import pytest
-
+from api.channels.adapters.bot import MaxChannel, TelegramChannel
+from api.channels.adapters.crm import AmoCrmChannel, Bitrix24Channel
+from api.channels.adapters.email import EmailChannel
 from api.channels.adapters.mock import MockChannel
 from api.channels.adapters.partner_api import PartnerApiChannel
 from api.channels.enums import ChannelType
@@ -35,11 +36,28 @@ async def test_resolve_partner_api_channel() -> None:
         assert isinstance(channel, PartnerApiChannel)
 
 
-def test_resolve_unsupported_requires_adr() -> None:
-    # CRM-канал ещё не реализован (M11.3) → NotImplementedError (диспетчер фиксирует FAILED).
+async def test_resolve_telegram_and_max() -> None:
     resolver = HttpChannelResolver(Settings())
-    with pytest.raises(NotImplementedError):
-        resolver.resolve(_cfg(ChannelType.CRM))
+    async with resolver.resolve(_cfg(ChannelType.TELEGRAM)) as channel:
+        assert isinstance(channel, TelegramChannel)
+    async with resolver.resolve(_cfg(ChannelType.MAX)) as channel:
+        assert isinstance(channel, MaxChannel)
+
+
+async def test_resolve_email_channel() -> None:
+    resolver = HttpChannelResolver(Settings())
+    async with resolver.resolve(_cfg(ChannelType.EMAIL)) as channel:
+        assert isinstance(channel, EmailChannel)
+
+
+async def test_resolve_crm_by_type() -> None:
+    resolver = HttpChannelResolver(Settings())
+    bitrix = _cfg(ChannelType.CRM, endpoint="http://portal.bitrix24.ru", crm_type="bitrix24")
+    async with resolver.resolve(bitrix) as channel:
+        assert isinstance(channel, Bitrix24Channel)
+    amo = _cfg(ChannelType.CRM, endpoint="http://x.amocrm.ru", crm_type="amocrm")
+    async with resolver.resolve(amo) as channel:
+        assert isinstance(channel, AmoCrmChannel)
 
 
 def test_to_channel_config_projection() -> None:
