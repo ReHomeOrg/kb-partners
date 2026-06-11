@@ -16,6 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import JSONResponse, Response
 
 from api import __version__
+from api.channels.inbound_router import router as inbound_router
+from api.channels.router import router as channels_router
 from api.config import get_settings
 from api.db import get_session
 from api.errors import ProblemException, problem_exception_handler
@@ -23,6 +25,11 @@ from api.observability.health import check_database, check_redis
 from api.observability.logging import configure_logging, get_logger
 from api.observability.metrics import MetricsMiddleware, metrics_response
 from api.observability.request_id import RequestIdMiddleware
+from api.push.router import router as push_router
+from api.requests.router import router as requests_router
+
+# Префикс доменного API (§11): /api/v1/partners.
+_API_PREFIX = "/api/v1/partners"
 
 configure_logging(get_settings().log_level)
 _logger = get_logger("api")
@@ -38,6 +45,12 @@ app.add_exception_handler(ProblemException, problem_exception_handler)
 # доступен всем внутренним слоям и логам запроса).
 app.add_middleware(MetricsMiddleware)
 app.add_middleware(RequestIdMiddleware)
+
+# Доменные роутеры (M1+) под общим префиксом /api/v1/partners.
+app.include_router(requests_router, prefix=_API_PREFIX)
+app.include_router(channels_router, prefix=_API_PREFIX)
+app.include_router(inbound_router, prefix=_API_PREFIX)
+app.include_router(push_router, prefix=_API_PREFIX)
 
 
 class HealthzResponse(BaseModel):

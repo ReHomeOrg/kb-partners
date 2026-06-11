@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 def test_healthz_ok(client: TestClient) -> None:
@@ -16,9 +18,16 @@ def test_healthz_echoes_request_id(client: TestClient) -> None:
     assert resp.headers["x-request-id"] == "req-123"
 
 
-def test_readyz_503_without_database(client: TestClient) -> None:
-    # БД в unit-окружении недоступна → SELECT 1 падает → 503 (мягкая деградация Redis
-    # не достигается, т.к. БД обязательна).
+def test_readyz_503_when_database_unreachable(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Недоступность БД симулируется детерминированно (не полагаемся на отсутствие
+    # БД в окружении: в CI и при integration-тестах Postgres поднят). Падение
+    # SELECT 1 → 503; мягкая деградация Redis не достигается — БД обязательна.
+    async def _unreachable(_session: AsyncSession) -> None:
+        raise RuntimeError("database unreachable")
+
+    monkeypatch.setattr("api.main.check_database", _unreachable)
     resp = client.get("/readyz")
     assert resp.status_code == 503
     assert resp.json()["status"] == "unavailable"

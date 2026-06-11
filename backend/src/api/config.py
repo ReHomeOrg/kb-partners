@@ -61,6 +61,13 @@ class Settings(BaseSettings):
             "По истечении — обезличивание/удаление; в LLM и логи идут только *_masked."
         ),
     )
+    retention_worker_enabled: bool = Field(
+        default=False,
+        description=(
+            "Включает воркер ретенции ПДн (NFR-12): обезличивание raw_input старше "
+            "raw_input_retention_days (raw_input := raw_input_masked). Дефолт False → инертен."
+        ),
+    )
 
     # --- Keycloak Bearer JWT (#29-аналог). Пустой auth_jwks_url → auth не
     # сконфигурирован (fail-closed 401). Issuer/audience задаются в окружении деплоя.
@@ -77,6 +84,19 @@ class Settings(BaseSettings):
     auth_leeway: int = Field(default=0, ge=0, description="Допуск по времени (сек) для exp/nbf.")
     auth_jwks_cache_ttl: int = Field(
         default=300, ge=1, description="TTL кеша JWKS (сек) до принудительного рефреша."
+    )
+
+    # --- OAuth2 для ИСХОДЯЩИХ m2m-вызовов (ADR-0005, FR-9.7). client_credentials —
+    # сервис-принципал kb-partners; token-exchange (RFC 8693) — делегированный токен
+    # пользователя для on-behalf-of downstream. ПУСТЫЕ креды → dev StaticTokenProvider.
+    # client_secret — ссылкой на kb-vault. ---
+    oauth_token_url: str = Field(
+        default="", description="Keycloak token-endpoint для исходящих токенов. ПУСТО → dev-режим."
+    )
+    oauth_client_id: str = Field(default="", description="client_id сервис-принципала kb-partners.")
+    oauth_client_secret: str = Field(
+        default="",
+        description="client_secret (ссылка на kb-vault). ПУСТО → dev StaticTokenProvider.",
     )
 
     # --- HTTP-клиенты к соседям (resilience и кеш). Конкретные base-URL —
@@ -159,6 +179,90 @@ class Settings(BaseSettings):
         default="", description="m2m-токен kb-support. ПУСТО → интеграция претензий инертна."
     )
 
+    # --- Классификатор категории (E2, §4.11). Детерминированные правила (быстрый
+    # путь) + LLMProvider (env-switch, как в kb-search). Реальные LLM-SDK — только
+    # через ADR (правило 6); пустой провайдер → NullLLMProvider (rules-only). ---
+    classifier_confidence_threshold: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Порог уверенности классификатора (FR-2.4). Ниже порога или при "
+            "неоднозначности заявка уходит в NEEDS_REVIEW (human-handoff)."
+        ),
+    )
+    classifier_llm_provider: str = Field(
+        default="",
+        description=(
+            "Выбор LLM-провайдера (yandexgpt/gigachat/vllm/mock). ПУСТО → NullLLMProvider "
+            "(только rules-путь). Боевой провайдер по умолчанию — YandexGPT (ADR-0003)."
+        ),
+    )
+    # YandexGPT — боевой LLM классификатора (ADR-0003, §16.9). РФ, ФЗ-152. Свой HTTP-
+    # адаптер (Api-Key), без вендорского SDK. ПУСТОЙ api_key/folder → провайдер инертен
+    # (rules-only). На вход модели идёт ТОЛЬКО raw_input_masked (ПДн вырезаны, FR-1.6).
+    yandexgpt_api_base_url: str = Field(
+        default="https://llm.api.cloud.yandex.net",
+        description="Базовый URL YandexGPT Foundation Models API.",
+    )
+    yandexgpt_api_key: str = Field(
+        default="", description="Api-Key YandexGPT (ссылка на kb-vault). ПУСТО → провайдер инертен."
+    )
+    yandexgpt_folder_id: str = Field(
+        default="", description="Идентификатор каталога Yandex Cloud (x-folder-id)."
+    )
+    yandexgpt_model: str = Field(
+        default="yandexgpt-lite",
+        description="Имя модели YandexGPT (modelUri=gpt://<folder>/<model>/latest).",
+    )
+
+    # --- Боевые каналы доставки партнёру (E4, §9.2, ADR-0004). Свои HTTP-адаптеры,
+    # без вендорских SDK. Токены ботов — в config канала (ссылка на kb-vault), не здесь;
+    # здесь только базовые URL API мессенджеров. ---
+    telegram_api_base_url: str = Field(
+        default="https://api.telegram.org", description="Базовый URL Telegram Bot API."
+    )
+    max_api_base_url: str = Field(
+        default="https://botapi.max.ru",
+        description="Базовый URL MAX Bot API [ДОПУЩЕНИЕ §16.10 — сверить].",
+    )
+    # IMAP-парсер входящих email-ответов партнёра (E5, §9.2, в РФ-контуре). ПУСТОЙ
+    # imap_host → poll инертен. Креды — ссылкой на kb-vault.
+    imap_host: str = Field(default="", description="IMAP-хост (IMAP4_SSL). ПУСТО → poll инертен.")
+    imap_port: int = Field(default=993, ge=1, le=65535, description="IMAP-порт (SSL).")
+    imap_user: str = Field(default="", description="IMAP-логин (ссылка на kb-vault).")
+    imap_password: str = Field(default="", description="IMAP-пароль (ссылка на kb-vault).")
+    imap_mailbox: str = Field(default="INBOX", description="IMAP-папка для опроса.")
+
+    # --- SLA (E6, §16 п.3). Бизнес-часы недельного графика + IANA-TZ (DST-корректно,
+    # FR-6.1). Дедлайны/breach считаются на чтении и переходах БЕЗ воркера (FR-6.2).
+    # Параметры — дефолты, подтверждение Архитектора по вехе (§16). ---
+    sla_timezone: str = Field(
+        default="Europe/Moscow", description="IANA-таймзона расчёта бизнес-часов SLA."
+    )
+    sla_business_open_hour: int = Field(
+        default=9, ge=0, le=23, description="Час начала рабочего окна (локальное время)."
+    )
+    sla_business_close_hour: int = Field(
+        default=18, ge=1, le=24, description="Час конца рабочего окна (локальное время)."
+    )
+    sla_business_days: list[int] = Field(
+        default_factory=lambda: [0, 1, 2, 3, 4],
+        description="Рабочие дни недели (0=Пн … 6=Вс).",
+    )
+    sla_accept_hours: float = Field(
+        default=4.0, gt=0, description="SLA принятия партнёром (бизнес-часы от диспетчеризации)."
+    )
+    sla_perform_hours: float = Field(
+        default=24.0, gt=0, description="SLA выполнения (бизнес-часы от принятия партнёром)."
+    )
+    sla_at_risk_fraction: float = Field(
+        default=0.8,
+        gt=0,
+        le=1,
+        description="Доля дедлайна, после которой состояние SLA → AT_RISK.",
+    )
+
     # --- Dramatiq-воркер (SLA-таймеры, time_based, IMAP-poll, outbox-drainer).
     # ПУСТОЙ broker_url → StubBroker, акторы инертны (broker/worker поднимает ops). ---
     worker_broker_url: str = Field(
@@ -166,6 +270,100 @@ class Settings(BaseSettings):
         description=(
             "URL Redis-broker для Dramatiq. ПУСТО → StubBroker, акторы инертны. "
             "Read-side вычисления (breach на чтении) от него не зависят."
+        ),
+    )
+    outbox_batch_size: int = Field(
+        default=50, ge=1, le=500, description="Сколько outbox-сообщений берёт дрейнер за раз."
+    )
+    outbox_max_attempts: int = Field(
+        default=5, ge=1, le=20, description="Попыток обработки outbox-сообщения до FAILED."
+    )
+    outbox_retry_base_seconds: float = Field(
+        default=30.0, gt=0, description="База backoff повтора outbox (сек): base * 2**(attempt-1)."
+    )
+    outbox_visibility_timeout_seconds: float = Field(
+        default=300.0,
+        gt=0,
+        description=(
+            "Видимость захваченного outbox-сообщения (сек): по истечении PROCESSING "
+            "снова доступно (reclaim осиротевших после сбоя воркера)."
+        ),
+    )
+
+    # --- Исходящие webhooks (E8, §11.4). Доставка ПОСЛЕ commit через transactional
+    # outbox; HMAC-подпись. ПУСТОЙ webhook_url → эмиссия событий выключена. ---
+    webhook_url: str = Field(
+        default="", description="URL подписчика доменных событий. ПУСТО → webhooks off."
+    )
+    webhook_secret: str = Field(
+        default="", description="Секрет HMAC-подписи исходящих webhooks (X-Signature)."
+    )
+
+    # --- Уведомления (E8, FR-8.1/8.2, §4.9). Эмиссия в outbox при переходах FSM,
+    # доставка после commit воркером по seam-каналам push/SMS/email. Мастер-гейт
+    # `notifications_enabled` (дефолт False → outbox-строки не плодятся); каждый
+    # канал включается своим креденшлом (пусто → seam инертен, лог намерения). ---
+    notifications_enabled: bool = Field(
+        default=False,
+        description=(
+            "Включает эмиссию уведомлений заявителю/партнёру/оператору при переходах "
+            "FSM (E8). Дефолт False → уведомления не ставятся в outbox (ручной режим)."
+        ),
+    )
+    # Web-push (VAPID, RFC 8291/8188, ADR-0004) — self-hosted через pywebpush. ПУСТОЙ
+    # vapid_private_key → push-канал инертен. Ключи — ссылкой на kb-vault.
+    vapid_private_key: str = Field(
+        default="", description="VAPID private key (PEM/base64url). ПУСТО → web-push инертен."
+    )
+    vapid_public_key: str = Field(
+        default="", description="VAPID public key (application server key для фронта)."
+    )
+    vapid_subject: str = Field(
+        default="", description="VAPID subject (mailto:ops@... или https URL контакта)."
+    )
+    # SMS — боевой провайдер SMS.ru (ADR-0004). Свой HTTP-адаптер, без SDK. ПУСТОЙ
+    # api_id → SMS-канал инертен. Секрет — ссылкой на kb-vault.
+    sms_ru_api_id: str = Field(default="", description="Api-ID SMS.ru. ПУСТО → SMS-канал инертен.")
+    sms_ru_api_base_url: str = Field(
+        default="https://sms.ru", description="Базовый URL SMS.ru API."
+    )
+    # Email — боевой SMTP в РФ (ADR-0004). ПУСТОЙ host → email-канал инертен.
+    notify_smtp_host: str = Field(
+        default="", description="SMTP-хост уведомлений (РФ). ПУСТО → email-канал инертен."
+    )
+    notify_smtp_port: int = Field(default=587, ge=1, le=65535, description="SMTP-порт (STARTTLS).")
+    notify_smtp_user: str = Field(default="", description="SMTP-логин (ссылка на kb-vault).")
+    notify_smtp_password: str = Field(default="", description="SMTP-пароль (ссылка на kb-vault).")
+    notify_email_from: str = Field(
+        default="", description="From-адрес уведомлений. ПУСТО → email-канал инертен."
+    )
+    notify_operator_email: str = Field(
+        default="",
+        description="Email оператора для эскалаций (FR-4.5/9.4). ПУСТО → эскалация-email инертна.",
+    )
+
+    # --- Автоматизация (E6, §6.6, FR-6.3). On_create-пайплайн (классификация→подбор→
+    # диспетчеризация) асинхронно через outbox. ПУСТО/False → инертно (ручной режим). ---
+    automation_on_create_enabled: bool = Field(
+        default=False,
+        description=(
+            "Включает авто-пайплайн при приёме заявки (on_create): intake ставит "
+            "outbox-задачу, воркер прогоняет classify→assign→dispatch системным субъектом."
+        ),
+    )
+    automation_autonomy_level: str = Field(
+        default="dispatch",
+        description=(
+            "Политика автономности (E9, FR-9.3): classify / assign / dispatch — как далеко "
+            "авто-пайплайн ведёт заявку без человека. Неизвестное → conservative classify."
+        ),
+    )
+    automation_time_based_enabled: bool = Field(
+        default=False,
+        description=(
+            "Включает time_based-движок (E6, FR-6.3): воркер-сканер откатывает заявки с "
+            "breach дедлайна принятия на следующего партнёра fallback-цепочки (авто-fallback). "
+            "Дефолт False → скан инертен; read-side breach (на чтении) от него не зависит."
         ),
     )
 

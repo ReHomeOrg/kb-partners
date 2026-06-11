@@ -20,11 +20,19 @@ servers:
 tags:
   - name: Infrastructure
     description: Liveness/readiness/metrics пробы (без префикса /api/v1).
-  # Доменные теги (M1+):
-  # - name: Requests        — заявки-на-услугу (ServiceRequest) и их жизненный цикл
-  # - name: Channels        — конфигурация каналов доставки партнёров
-  # - name: Inbound         — приём ответов партнёров (webhook/bot/IMAP)
+  - name: Requests
+    description: Заявки-на-услугу (ServiceRequest) и их жизненный цикл.
+  - name: Channels
+    description: Конфигурация каналов доставки партнёров (admin).
+  - name: Inbound
+    description: Приём ответов партнёров (подписанные webhooks; токен + HMAC).
+  # Доменные теги (следующие эпики):
   # - name: Webhooks        — исходящие доменные события
+
+# Глобально все операции требуют Keycloak Bearer JWT (aud: kb-partners).
+# Публичные инфраструктурные пробы переопределяют это пустым `security: []`.
+security:
+  - bearerAuth: []
 
 paths:
   /healthz:
@@ -32,6 +40,7 @@ paths:
       tags: [Infrastructure]
       summary: Liveness probe
       operationId: healthz
+      security: []  # публичная проба (k8s liveness)
       responses:
         "200":
           description: Процесс жив.
@@ -45,6 +54,7 @@ paths:
       tags: [Infrastructure]
       summary: Readiness probe
       operationId: readyz
+      security: []  # публичная проба (k8s readiness)
       responses:
         "200":
           description: Готов к трафику (БД доступна; redis — мягкий статус).
@@ -56,6 +66,7 @@ paths:
       tags: [Infrastructure]
       summary: Prometheus metrics
       operationId: metrics
+      security: []  # внутренний scrape Prometheus
       responses:
         "200":
           description: Метрики в формате Prometheus exposition.
@@ -64,7 +75,938 @@ paths:
               schema:
                 type: string
 
+  # --- Заявки (E1 intake, веха M1.2). Префикс /api/v1/partners. ---
+  /api/v1/partners/requests:
+    get:
+      tags: [Requests]
+      summary: Список заявок (scope-фильтр, курсорная пагинация)
+      operationId: listRequests
+      description: >-
+        Видимые субъекту заявки (контур access_level + владение). Курсорная
+        пагинация; фильтры status / category / partner_id / период (§11.1).
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/RequestStatus"
+        - name: category
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/Category"
+        - name: partner_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: created_from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: created_to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+      responses:
+        "200":
+          description: Страница заявок.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestListResponse"
+        "401":
+          description: Не аутентифицирован.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      tags: [Requests]
+      summary: Приём заявки (ЛК-форма / m2m)
+      operationId: createRequest
+      description: >-
+        FR-1.1/FR-1.4. `channel_in` выводится бэкендом из типа субъекта (не из тела).
+        Идемпотентность — по заголовку `Idempotency-Key`.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+          description: Ключ дедупликации приёма; повтор возвращает существующую заявку (200).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RequestCreate"
+      responses:
+        "201":
+          description: Заявка создана.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestRead"
+        "200":
+          description: Идемпотентный повтор — существующая заявка.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestRead"
+        "401":
+          description: Не аутентифицирован.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Ошибка валидации тела.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/partners/requests/from-chat:
+    post:
+      tags: [Requests]
+      summary: Приём заявки из AI-чата (kb-search, SERVICE-only)
+      operationId: createRequestFromChat
+      description: FR-1.2. Только сервис-принципал (m2m). Идемпотентность по `chat_session_id`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FromChatCreate"
+      responses:
+        "201":
+          description: Заявка создана.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestRead"
+        "200":
+          description: Идемпотентный повтор — существующая заявка.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestRead"
+        "403":
+          description: Требуется сервис-принципал.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/partners/requests/from-ticket:
+    post:
+      tags: [Requests]
+      summary: Эскалация заявки из тикета (kb-support, SERVICE-only)
+      operationId: createRequestFromTicket
+      description: FR-1.3. Только сервис-принципал (m2m). Идемпотентность по `ticket_id`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FromTicketCreate"
+      responses:
+        "201":
+          description: Заявка создана.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestRead"
+        "200":
+          description: Идемпотентный повтор — существующая заявка.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestRead"
+        "403":
+          description: Требуется сервис-принципал.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/partners/requests/{request_id}:
+    parameters:
+      - name: request_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Requests]
+      summary: Карточка заявки + allowed_transitions
+      operationId: getRequest
+      description: >-
+        Карточка с `allowed_transitions` (§7). `raw_input` маскируется по scope.
+        Недоступный ресурс → 404 (анти-enumeration).
+      responses:
+        "200":
+          description: Карточка заявки.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestDetail"
+        "404":
+          description: Заявка не найдена или недоступна.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/partners/requests/{request_id}/transition:
+    parameters:
+      - name: request_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Requests]
+      summary: Переход статуса (валидация по FSM)
+      operationId: transitionRequest
+      description: Переход FSM (§7). Запрещённый → 409; недоступная → 404; нет прав → 403.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TransitionRequest"
+      responses:
+        "200":
+          description: Новое состояние карточки.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestDetail"
+        "403":
+          description: Действие недоступно субъекту.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Заявка не найдена или недоступна.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Запрещённый переход (FSM).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/partners/requests/{request_id}/cancel:
+    parameters:
+      - name: request_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Requests]
+      summary: Отмена заявки (с причиной)
+      operationId: cancelRequest
+      description: Отмена из нетерминального статуса (§7). Партнёру запрещена (403).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CancelRequest"
+      responses:
+        "200":
+          description: Заявка отменена.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestDetail"
+        "403":
+          description: Действие недоступно субъекту.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Заявка не найдена или недоступна.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Заявка уже в терминальном статусе.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/partners/requests/{request_id}/classify:
+    parameters:
+      - name: request_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Requests]
+      summary: (Ре)классификация категории (operator/agent)
+      operationId: classifyRequest
+      description: >-
+        E2: rules + LLM по `raw_input_masked` (FR-2.1–2.3); ниже порога уверенности
+        или неоднозначно → NEEDS_REVIEW (FR-2.4). Трассировка в `classification`.
+      responses:
+        "200":
+          description: Карточка с обновлённой категорией/классификацией.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestDetail"
+        "403":
+          description: Доступно только оператору/агенту.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Заявка не найдена или недоступна.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Классификация недопустима в текущем статусе.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/partners/requests/{request_id}/assign:
+    parameters:
+      - name: request_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Requests]
+      summary: Подбор / назначение партнёра (operator/agent)
+      operationId: assignRequest
+      description: >-
+        E3 (FR-3.1–3.4). partner_id → ручное назначение; пусто → авто-подбор по
+        реестру kb-platform (ранжирование + fallback_chain + match_trace).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssignRequest"
+      responses:
+        "200":
+          description: Назначено; карточка с partner_id/каналом/трассировкой.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestDetail"
+        "403":
+          description: Действие недоступно субъекту.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Заявка не найдена или недоступна.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Назначение недопустимо в текущем статусе / заявка не классифицирована.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Нет пригодных партнёров для авто-подбора.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/partners/requests/{request_id}/accept:
+    parameters:
+      - name: request_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Requests]
+      summary: Приёмка пользователем
+      operationId: acceptRequest
+      description: FR-7.1. DONE→ACCEPTED_BY_USER. Партнёру недоступно (403); не DONE → 409.
+      responses:
+        "200":
+          description: Заявка принята пользователем.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestDetail"
+        "403":
+          description: Действие недоступно субъекту.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Заявка не найдена или недоступна.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Приёмка недопустима в текущем статусе.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/partners/requests/{request_id}/dispute:
+    parameters:
+      - name: request_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Requests]
+      summary: Открыть спор (с причиной)
+      operationId: disputeRequest
+      description: >-
+        FR-7.2. DONE|ACCEPTED_BY_USER→DISPUTE; при сконфигурированном контуре
+        порождает претензию COMPENSATION в kb-support (claim_ref).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DisputeRequest"
+      responses:
+        "200":
+          description: Спор открыт.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestDetail"
+        "403":
+          description: Действие недоступно субъекту.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Заявка не найдена или недоступна.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Спор недопустим в текущем статусе.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/partners/requests/{request_id}/settlement:
+    parameters:
+      - name: request_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Requests]
+      summary: Подтверждение расчёта контуром (SERVICE-only)
+      operationId: confirmSettlement
+      description: >-
+        FR-7.3. Платёжный контур rehome.one подтверждает расчёт →
+        ACCEPTED_BY_USER→PAID. Деньги модуль не считает — хранит ссылки.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SettlementConfirm"
+      responses:
+        "200":
+          description: Заявка оплачена (PAID).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestDetail"
+        "403":
+          description: Требуется сервис-принципал.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Заявка не найдена.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Расчёт недопустим в текущем статусе.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/partners/requests/{request_id}/dispatch:
+    parameters:
+      - name: request_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Requests]
+      summary: Диспетчеризация партнёру (operator/agent)
+      operationId: dispatchRequest
+      description: >-
+        E4 (FR-4.1–4.6). Доставка по каналу с наивысшим priority среди активных;
+        fallback по партнёрам цепочки; исчерпание → FAILED_DISPATCH. Каждая попытка —
+        DispatchAttempt.
+      responses:
+        "200":
+          description: Результат диспетчеризации (DISPATCHED или FAILED_DISPATCH).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestDetail"
+        "403":
+          description: Действие недоступно субъекту.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Заявка не найдена или недоступна.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Диспетчеризация недопустима в текущем статусе.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/partners/requests/{request_id}/partner-response:
+    parameters:
+      - name: request_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Requests]
+      summary: Ответ партнёра (портал LIGHT)
+      operationId: partnerResponse
+      description: >-
+        E10/FR-10.2. Партнёр accepted/rejected/in_progress/done по своей заявке.
+        Только партнёр (403); чужая → 404; запрещённый переход → 409; неизвестный → 422.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PartnerResponse"
+      responses:
+        "200":
+          description: Новое состояние карточки.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestDetail"
+        "403":
+          description: Доступно только партнёру-исполнителю.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Заявка не найдена или недоступна.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Запрещённый переход (FSM).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Неизвестный статус партнёра.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/partners/requests/{request_id}/requester-context:
+    parameters:
+      - name: request_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Requests]
+      summary: Контекст заявителя из rehome.one (operator/agent)
+      operationId: getRequesterContext
+      description: >-
+        E9/FR-9.1. User/Premises/Booking заявителя (контекст для оператора/агента).
+        Только привилегированные роли (403); недоступная заявка → 404.
+      responses:
+        "200":
+          description: Контекст заявителя (поля опциональны / контур недоступен → null).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequesterContextResponse"
+        "403":
+          description: Доступно только оператору/агенту.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Заявка не найдена или недоступна.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/partners/requests/{request_id}/messages:
+    parameters:
+      - name: request_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Requests]
+      summary: Сообщения заявки (внутренние — только операторам)
+      operationId: listRequestMessages
+      description: Хронология; `is_internal`-заметки скрыты от заявителя/партнёра (правило 10).
+      responses:
+        "200":
+          description: Список сообщений.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MessageRead"
+        "404":
+          description: Заявка не найдена или недоступна.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      tags: [Requests]
+      summary: Сообщение / внутренняя заметка
+      operationId: addRequestMessage
+      description: >-
+        Добавить сообщение. `is_internal=true` — только оператор (иначе 403).
+        Недоступная заявка → 404.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MessageCreate"
+      responses:
+        "201":
+          description: Сообщение добавлено.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageRead"
+        "403":
+          description: Внутренняя заметка доступна только оператору.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Заявка не найдена или недоступна.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # --- Входящие от партнёров (§11.3). Публичные: токен в пути + HMAC-подпись. ---
+  /api/v1/partners/inbound/api/{token}:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Inbound]
+      summary: Входящее от партнёра (подписанный webhook)
+      operationId: inboundApi
+      security: []  # аутентификация — токен в пути + HMAC-подпись, не JWT
+      parameters:
+        - name: X-Signature
+          in: header
+          required: true
+          schema:
+            type: string
+          description: HMAC-SHA256(`<X-Timestamp>.<body>`, inbound_token), hex.
+        - name: X-Timestamp
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Epoch-секунды; вне окна ±300с → 401 (replay-защита).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InboundEnvelope"
+      responses:
+        "200":
+          description: Принято (`ok`) либо дубль (`duplicate`).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [ok, duplicate]
+        "401":
+          description: Невалидная подпись или таймстемп.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Неизвестный токен либо заявка вне ведения партнёра.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Некорректное тело или неизвестный статус.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # --- Каналы партнёров (§11.2, admin). ---
+  /api/v1/partners/channels:
+    get:
+      tags: [Channels]
+      summary: Список конфигураций каналов
+      operationId: listChannels
+      parameters:
+        - name: collaborator_id
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Список каналов.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ChannelConfigRead"
+        "403":
+          description: Требуется admin-скоуп.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      tags: [Channels]
+      summary: Создать конфигурацию канала
+      operationId: createChannel
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChannelConfigCreate"
+      responses:
+        "201":
+          description: Канал создан.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChannelConfigRead"
+        "403":
+          description: Требуется admin-скоуп.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Канал для этого партнёра и типа уже существует.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/partners/channels/{config_id}:
+    parameters:
+      - name: config_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Channels]
+      summary: Карточка конфигурации канала
+      operationId: getChannel
+      responses:
+        "200":
+          description: Конфигурация канала.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChannelConfigRead"
+        "404":
+          description: Не найдено.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    patch:
+      tags: [Channels]
+      summary: Изменить конфигурацию канала
+      operationId: updateChannel
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChannelConfigUpdate"
+      responses:
+        "200":
+          description: Обновлённая конфигурация.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChannelConfigRead"
+        "404":
+          description: Не найдено.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/partners/push/subscriptions:
+    post:
+      tags: [Push]
+      summary: Зарегистрировать web-push подписку браузера (E8, FR-10.1)
+      operationId: subscribePush
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PushSubscriptionCreate"
+      responses:
+        "200":
+          description: Подписка сохранена (идемпотентно по endpoint владельца).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PushSubscriptionAck"
+        "401":
+          description: Не аутентифицирован.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags: [Push]
+      summary: Отписать устройство по endpoint
+      operationId: unsubscribePush
+      parameters:
+        - name: endpoint
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Подписка удалена (если была у владельца).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PushSubscriptionAck"
+        "401":
+          description: Не аутентифицирован.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Keycloak RS256 Bearer JWT (aud содержит `kb-partners`).
   schemas:
     Healthz:
       type: object
@@ -95,3 +1037,567 @@ components:
             type: object
             additionalProperties:
               type: string
+
+    # --- Web-push подписки (E8, FR-10.1) ---
+    PushSubscriptionCreate:
+      type: object
+      required: [endpoint, keys]
+      properties:
+        endpoint:
+          type: string
+          maxLength: 2048
+        keys:
+          type: object
+          required: [p256dh, auth]
+          properties:
+            p256dh:
+              type: string
+            auth:
+              type: string
+          additionalProperties: false
+      additionalProperties: false
+
+    PushSubscriptionAck:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+      additionalProperties: false
+
+    # --- Заявки (E1) ---
+    ChannelIn:
+      type: string
+      enum: [WEB_FORM, AI_CHAT, SUPPORT_TICKET, API, MESSENGER_INBOUND]
+
+    Category:
+      type: string
+      enum: [CLEANING, MOVING, REPAIR, KEY_DELIVERY, OTHER]
+
+    RequestStatus:
+      type: string
+      enum:
+        [
+          NEW,
+          CLASSIFYING,
+          CLASSIFIED,
+          NEEDS_REVIEW,
+          MATCHING,
+          ASSIGNED,
+          DISPATCHED,
+          FAILED_DISPATCH,
+          ACCEPTED,
+          IN_PROGRESS,
+          DONE,
+          ACCEPTED_BY_USER,
+          DISPUTE,
+          PAID,
+          CANCELLED,
+          REJECTED,
+        ]
+
+    RequestCreate:
+      description: >-
+        Тело приёма из ЛК-формы / m2m. `channel_in` НЕ принимается (выводится
+        бэкендом); `raw_input` маскируется до логов/LLM (FR-1.6).
+      type: object
+      additionalProperties: false
+      required: [raw_input]
+      properties:
+        raw_input:
+          type: string
+          minLength: 1
+          maxLength: 20000
+        requester_id:
+          type: string
+          maxLength: 255
+        booking_id:
+          type: string
+          maxLength: 255
+        premises_id:
+          type: string
+          maxLength: 255
+        source_ref:
+          type: object
+          additionalProperties: true
+
+    FromChatCreate:
+      description: Тело инициации из AI-чата (kb-search). Идемпотентность по chat_session_id.
+      type: object
+      additionalProperties: false
+      required: [chat_session_id, requester_id, raw_input]
+      properties:
+        chat_session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+        requester_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+        raw_input:
+          type: string
+          minLength: 1
+          maxLength: 20000
+        transcript:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        booking_id:
+          type: string
+          maxLength: 255
+        premises_id:
+          type: string
+          maxLength: 255
+
+    FromTicketCreate:
+      description: Тело эскалации из тикета (kb-support). Идемпотентность по ticket_id.
+      type: object
+      additionalProperties: false
+      required: [ticket_id, requester_id, raw_input]
+      properties:
+        ticket_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+        requester_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+        raw_input:
+          type: string
+          minLength: 1
+          maxLength: 20000
+        booking_id:
+          type: string
+          maxLength: 255
+        premises_id:
+          type: string
+          maxLength: 255
+
+    RequestRead:
+      description: Представление заявки наружу. Без raw_input (ПДн, FR-1.6/NFR-5).
+      type: object
+      additionalProperties: false
+      required: [id, number, requester_id, channel_in, category, status, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        number:
+          type: string
+        requester_id:
+          type: string
+        channel_in:
+          $ref: "#/components/schemas/ChannelIn"
+        category:
+          oneOf:
+            - $ref: "#/components/schemas/Category"
+            - type: "null"
+        status:
+          $ref: "#/components/schemas/RequestStatus"
+        created_at:
+          type: string
+          format: date-time
+
+    AuthorType:
+      type: string
+      enum: [REQUESTER, OPERATOR, PARTNER, SYSTEM, AI]
+
+    RequestDetail:
+      description: >-
+        Карточка заявки: поля RequestRead + allowed_transitions (§7) и scope-маскированный
+        raw_input (оператор/владелец — исходник, партнёр — маска).
+      type: object
+      additionalProperties: false
+      required:
+        [
+          id,
+          number,
+          requester_id,
+          channel_in,
+          category,
+          status,
+          created_at,
+          partner_id,
+          product_code,
+          booking_id,
+          premises_id,
+          delivery_channel,
+          service_order_id,
+          amount_ref,
+          escrow_ref,
+          dispute_id,
+          claim_ref,
+          updated_at,
+          raw_input,
+          classification,
+          sla,
+          match_trace,
+          fallback_chain,
+          allowed_transitions,
+        ]
+      properties:
+        id:
+          type: string
+          format: uuid
+        number:
+          type: string
+        requester_id:
+          type: string
+        channel_in:
+          $ref: "#/components/schemas/ChannelIn"
+        category:
+          oneOf:
+            - $ref: "#/components/schemas/Category"
+            - type: "null"
+        status:
+          $ref: "#/components/schemas/RequestStatus"
+        created_at:
+          type: string
+          format: date-time
+        partner_id:
+          oneOf:
+            - type: string
+            - type: "null"
+        product_code:
+          oneOf:
+            - type: string
+            - type: "null"
+        booking_id:
+          oneOf:
+            - type: string
+            - type: "null"
+        premises_id:
+          oneOf:
+            - type: string
+            - type: "null"
+        delivery_channel:
+          oneOf:
+            - type: string
+            - type: "null"
+        service_order_id:
+          oneOf:
+            - type: string
+            - type: "null"
+        amount_ref:
+          oneOf:
+            - type: string
+            - type: "null"
+        escrow_ref:
+          oneOf:
+            - type: string
+            - type: "null"
+        dispute_id:
+          oneOf:
+            - type: string
+            - type: "null"
+        claim_ref:
+          oneOf:
+            - type: string
+            - type: "null"
+        updated_at:
+          type: string
+          format: date-time
+        raw_input:
+          type: string
+        classification:
+          oneOf:
+            - type: object
+              additionalProperties: true
+            - type: "null"
+        sla:
+          description: SLA-дедлайны + вычисленные на чтении состояния (E6).
+          oneOf:
+            - type: object
+              additionalProperties: true
+            - type: "null"
+        match_trace:
+          description: Объяснимость подбора (только сотрудникам; иначе null).
+          oneOf:
+            - type: object
+              additionalProperties: true
+            - type: "null"
+        fallback_chain:
+          description: Упорядоченные collaborator_id для авто-fallback (только сотрудникам).
+          oneOf:
+            - type: array
+              items:
+                type: string
+            - type: "null"
+        allowed_transitions:
+          type: array
+          items:
+            $ref: "#/components/schemas/RequestStatus"
+
+    AssignRequest:
+      description: >-
+        partner_id задан → ручное назначение (FR-3.4); пусто → авто-подбор по
+        реестру (service_area — опциональный гео-фильтр).
+      type: object
+      additionalProperties: false
+      properties:
+        partner_id:
+          type: string
+          maxLength: 255
+        service_area:
+          type: string
+          maxLength: 255
+
+    AttachmentRef:
+      description: Ссылка на вложение в kb-files (FR-1.5).
+      type: object
+      additionalProperties: false
+      required: [file_id]
+      properties:
+        file_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+        filename:
+          oneOf:
+            - type: string
+            - type: "null"
+        content_type:
+          oneOf:
+            - type: string
+            - type: "null"
+
+    MessageCreate:
+      description: Сообщение/заметка. is_internal=true — только оператор (иначе 403).
+      type: object
+      additionalProperties: false
+      required: [text]
+      properties:
+        text:
+          type: string
+          minLength: 1
+          maxLength: 20000
+        is_internal:
+          type: boolean
+          default: false
+        attachments:
+          type: array
+          items:
+            $ref: "#/components/schemas/AttachmentRef"
+
+    MessageRead:
+      description: Сообщение заявки. Внутренние заметки в выдаче — только операторам.
+      type: object
+      additionalProperties: false
+      required: [id, author_type, author_id, is_internal, text, attachments, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        author_type:
+          $ref: "#/components/schemas/AuthorType"
+        author_id:
+          oneOf:
+            - type: string
+            - type: "null"
+        is_internal:
+          type: boolean
+        text:
+          type: string
+        attachments:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+
+    TransitionRequest:
+      description: Переход FSM; target валидируется по §7.
+      type: object
+      additionalProperties: false
+      required: [target]
+      properties:
+        target:
+          $ref: "#/components/schemas/RequestStatus"
+
+    CancelRequest:
+      description: Отмена заявки с обязательной причиной.
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 20000
+
+    DisputeRequest:
+      description: Открытие спора с обязательной причиной (FR-7.2).
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 20000
+
+    SettlementConfirm:
+      description: Подтверждение расчёта платёжным контуром (FR-7.3). Только ссылки.
+      type: object
+      additionalProperties: false
+      properties:
+        amount_ref:
+          type: string
+          maxLength: 255
+        escrow_ref:
+          type: string
+          maxLength: 255
+
+    PartnerResponse:
+      description: Ответ партнёра по заявке (E10, FR-10.2).
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: accepted / rejected / in_progress / done.
+        message:
+          type: string
+          maxLength: 20000
+
+    RequesterContextResponse:
+      description: Контекст заявителя из rehome.one (E9). Все поля опциональны.
+      type: object
+      additionalProperties: false
+      properties:
+        user_display_name:
+          oneOf: [{ type: string }, { type: "null" }]
+        user_phone:
+          oneOf: [{ type: string }, { type: "null" }]
+        user_email:
+          oneOf: [{ type: string }, { type: "null" }]
+        premises_address:
+          oneOf: [{ type: string }, { type: "null" }]
+        booking_status:
+          oneOf: [{ type: string }, { type: "null" }]
+
+    RequestListResponse:
+      description: Страница списка заявок + курсор следующей страницы (или null).
+      type: object
+      additionalProperties: false
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/RequestRead"
+        next_cursor:
+          oneOf:
+            - type: string
+            - type: "null"
+
+    # --- Каналы (§6.4, §11.2) ---
+    ChannelType:
+      type: string
+      enum: [API, CRM, TELEGRAM, MAX, EMAIL, MOCK]
+
+    InboundEnvelope:
+      description: Конверт входящего от партнёра (E5). Подпись/таймстемп — в заголовках.
+      type: object
+      required: [request_ref, status, nonce]
+      properties:
+        request_ref:
+          type: string
+          minLength: 1
+          maxLength: 255
+        status:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: accepted / rejected / in_progress / done.
+        nonce:
+          type: string
+          minLength: 1
+          maxLength: 255
+        message:
+          type: string
+          maxLength: 20000
+
+    ChannelConfigCreate:
+      description: Конфигурация канала партнёра. inbound_token — секрет, в выдаче не возвращается.
+      type: object
+      additionalProperties: false
+      required: [collaborator_id, channel_type]
+      properties:
+        collaborator_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+        channel_type:
+          $ref: "#/components/schemas/ChannelType"
+        priority:
+          type: integer
+          minimum: 0
+          default: 100
+        config:
+          type: object
+          additionalProperties: true
+        inbound_token:
+          type: string
+          maxLength: 255
+        is_active:
+          type: boolean
+          default: true
+
+    ChannelConfigUpdate:
+      description: Частичное обновление канала.
+      type: object
+      additionalProperties: false
+      properties:
+        priority:
+          type: integer
+          minimum: 0
+        config:
+          type: object
+          additionalProperties: true
+        inbound_token:
+          type: string
+          maxLength: 255
+        is_active:
+          type: boolean
+
+    ChannelConfigRead:
+      description: Представление канала. БЕЗ inbound_token (секрет).
+      type: object
+      additionalProperties: false
+      required:
+        [id, collaborator_id, channel_type, priority, config, is_active, health, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        collaborator_id:
+          type: string
+        channel_type:
+          $ref: "#/components/schemas/ChannelType"
+        priority:
+          type: integer
+        config:
+          type: object
+          additionalProperties: true
+        is_active:
+          type: boolean
+        health:
+          oneOf:
+            - type: object
+              additionalProperties: true
+            - type: "null"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time

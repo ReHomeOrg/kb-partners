@@ -28,6 +28,9 @@ dependencies = [
     # SLA-таймеры, time_based-правила, IMAP-poll, outbox-drainer (NFR, ADR-0001).
     # Actor config-gated: без broker URL — StubBroker, инертен (broker/worker — ops).
     "dramatiq>=1.16,<2",
+    # Web-push (VAPID, RFC 8291/8188) для портала LIGHT (E8, ADR-0004). Self-hosted,
+    # без внешнего сервиса (ФЗ-152). Крипто (ECDH/aes128gcm) не хэндроллим.
+    "pywebpush>=2,<3",
 ]
 
 [project.optional-dependencies]
@@ -102,6 +105,11 @@ untyped_calls_exclude = ["dramatiq"]
 [[tool.mypy.overrides]]
 module = "tests.*"
 disallow_untyped_defs = false
+
+# pywebpush не поставляет type-stubs/py.typed (web-push крипто, ADR-0004).
+[[tool.mypy.overrides]]
+module = "pywebpush.*"
+ignore_missing_imports = true
 
 # ---------------------------------------------------------------------------
 # Pytest
