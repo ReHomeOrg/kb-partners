@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import JSONResponse, Response
 
 from api import __version__
+from api.channels.router import router as channels_router
 from api.config import get_settings
 from api.db import get_session
 from api.errors import ProblemException, problem_exception_handler
@@ -45,6 +46,7 @@ app.add_middleware(RequestIdMiddleware)
 
 # Доменные роутеры (M1+) под общим префиксом /api/v1/partners.
 app.include_router(requests_router, prefix=_API_PREFIX)
+app.include_router(channels_router, prefix=_API_PREFIX)
 
 
 class HealthzResponse(BaseModel):

@@ -107,3 +107,16 @@ def test_spec_declares_assign_operation(spec: dict[str, Any]) -> None:
     Draft202012Validator.check_schema(schemas["AssignRequest"])
     detail_props = schemas["RequestDetail"]["properties"]
     assert {"match_trace", "fallback_chain", "delivery_channel"} <= set(detail_props)
+
+
+def test_spec_declares_channels_operations(spec: dict[str, Any]) -> None:
+    # M3.2a: CRUD каналов (admin).
+    paths = spec["paths"]
+    assert {"get", "post"} <= set(paths["/api/v1/partners/channels"])
+    assert {"get", "patch"} <= set(paths["/api/v1/partners/channels/{config_id}"])
+    schemas = spec["components"]["schemas"]
+    for name in ("ChannelConfigCreate", "ChannelConfigUpdate", "ChannelConfigRead", "ChannelType"):
+        assert name in schemas, f"missing schema {name}"
+        Draft202012Validator.check_schema(schemas[name])
+    # inbound_token (секрет) не возвращается наружу.
+    assert "inbound_token" not in schemas["ChannelConfigRead"]["properties"]

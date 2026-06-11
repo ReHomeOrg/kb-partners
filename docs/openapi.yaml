@@ -22,8 +22,9 @@ tags:
     description: Liveness/readiness/metrics пробы (без префикса /api/v1).
   - name: Requests
     description: Заявки-на-услугу (ServiceRequest) и их жизненный цикл.
+  - name: Channels
+    description: Конфигурация каналов доставки партнёров (admin).
   # Доменные теги (следующие эпики):
-  # - name: Channels        — конфигурация каналов доставки партнёров
   # - name: Inbound         — приём ответов партнёров (webhook/bot/IMAP)
   # - name: Webhooks        — исходящие доменные события
 
@@ -519,6 +520,112 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  # --- Каналы партнёров (§11.2, admin). ---
+  /api/v1/partners/channels:
+    get:
+      tags: [Channels]
+      summary: Список конфигураций каналов
+      operationId: listChannels
+      parameters:
+        - name: collaborator_id
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Список каналов.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ChannelConfigRead"
+        "403":
+          description: Требуется admin-скоуп.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      tags: [Channels]
+      summary: Создать конфигурацию канала
+      operationId: createChannel
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChannelConfigCreate"
+      responses:
+        "201":
+          description: Канал создан.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChannelConfigRead"
+        "403":
+          description: Требуется admin-скоуп.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Канал для этого партнёра и типа уже существует.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/partners/channels/{config_id}:
+    parameters:
+      - name: config_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Channels]
+      summary: Карточка конфигурации канала
+      operationId: getChannel
+      responses:
+        "200":
+          description: Конфигурация канала.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChannelConfigRead"
+        "404":
+          description: Не найдено.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    patch:
+      tags: [Channels]
+      summary: Изменить конфигурацию канала
+      operationId: updateChannel
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChannelConfigUpdate"
+      responses:
+        "200":
+          description: Обновлённая конфигурация.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChannelConfigRead"
+        "404":
+          description: Не найдено.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
 components:
   securitySchemes:
     bearerAuth:
@@ -909,3 +1016,84 @@ components:
           oneOf:
             - type: string
             - type: "null"
+
+    # --- Каналы (§6.4, §11.2) ---
+    ChannelType:
+      type: string
+      enum: [API, CRM, TELEGRAM, MAX, EMAIL, MOCK]
+
+    ChannelConfigCreate:
+      description: Конфигурация канала партнёра. inbound_token — секрет, в выдаче не возвращается.
+      type: object
+      additionalProperties: false
+      required: [collaborator_id, channel_type]
+      properties:
+        collaborator_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+        channel_type:
+          $ref: "#/components/schemas/ChannelType"
+        priority:
+          type: integer
+          minimum: 0
+          default: 100
+        config:
+          type: object
+          additionalProperties: true
+        inbound_token:
+          type: string
+          maxLength: 255
+        is_active:
+          type: boolean
+          default: true
+
+    ChannelConfigUpdate:
+      description: Частичное обновление канала.
+      type: object
+      additionalProperties: false
+      properties:
+        priority:
+          type: integer
+          minimum: 0
+        config:
+          type: object
+          additionalProperties: true
+        inbound_token:
+          type: string
+          maxLength: 255
+        is_active:
+          type: boolean
+
+    ChannelConfigRead:
+      description: Представление канала. БЕЗ inbound_token (секрет).
+      type: object
+      additionalProperties: false
+      required:
+        [id, collaborator_id, channel_type, priority, config, is_active, health, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        collaborator_id:
+          type: string
+        channel_type:
+          $ref: "#/components/schemas/ChannelType"
+        priority:
+          type: integer
+        config:
+          type: object
+          additionalProperties: true
+        is_active:
+          type: boolean
+        health:
+          oneOf:
+            - type: object
+              additionalProperties: true
+            - type: "null"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
