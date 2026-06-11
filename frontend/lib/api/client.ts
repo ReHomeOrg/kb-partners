@@ -45,8 +45,14 @@ type BodyJson<O extends keyof operations> = operations[O] extends {
 export type RequestListResponse = OkJson<"listRequests", 200>;
 export type RequestDetail = OkJson<"getRequest", 200>;
 export type MessageList = OkJson<"listRequestMessages", 200>;
+export type MessageRead = OkJson<"addRequestMessage", 201>;
 export type PartnerResponseInput = BodyJson<"partnerResponse">;
 export type ListRequestsQuery = NonNullable<operations["listRequests"]["parameters"]["query"]>;
+// Операторские действия (рабочее место оператора, E2/E3/E4/E7/E9).
+export type TransitionInput = BodyJson<"transitionRequest">;
+export type AssignInput = BodyJson<"assignRequest">;
+export type MessageInput = BodyJson<"addRequestMessage">;
+export type RequesterContext = OkJson<"getRequesterContext", 200>;
 
 const PREFIX = "/api/v1/partners";
 
@@ -104,14 +110,66 @@ export async function partnerRespond(
   body: PartnerResponseInput,
   deps?: ApiFetchDeps,
 ): Promise<RequestDetail> {
+  return postJson<RequestDetail>(`${PREFIX}/requests/${id}/partner-response`, body, deps);
+}
+
+async function postJson<T>(path: string, body: unknown, deps?: ApiFetchDeps): Promise<T> {
   const response = await apiFetch(
-    `${PREFIX}/requests/${id}/partner-response`,
+    path,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify(body ?? {}),
     },
     deps,
   );
-  return parseJson<RequestDetail>(response);
+  return parseJson<T>(response);
+}
+
+// --- Операторские действия (рабочее место оператора) ---
+
+/** Реклассификация заявки оператором (E2, FR-2.5). */
+export async function classifyRequest(id: string, deps?: ApiFetchDeps): Promise<RequestDetail> {
+  return postJson<RequestDetail>(`${PREFIX}/requests/${id}/classify`, {}, deps);
+}
+
+/** Подбор/назначение партнёра (E3, FR-3.4): авто (пусто) или ручное (partner_id). */
+export async function assignRequest(
+  id: string,
+  body: AssignInput = {},
+  deps?: ApiFetchDeps,
+): Promise<RequestDetail> {
+  return postJson<RequestDetail>(`${PREFIX}/requests/${id}/assign`, body, deps);
+}
+
+/** Диспетчеризация по каналу (E4). */
+export async function dispatchRequest(id: string, deps?: ApiFetchDeps): Promise<RequestDetail> {
+  return postJson<RequestDetail>(`${PREFIX}/requests/${id}/dispatch`, {}, deps);
+}
+
+/** Произвольный переход FSM оператором/агентом (§7). */
+export async function transitionRequest(
+  id: string,
+  body: TransitionInput,
+  deps?: ApiFetchDeps,
+): Promise<RequestDetail> {
+  return postJson<RequestDetail>(`${PREFIX}/requests/${id}/transition`, body, deps);
+}
+
+/** Добавить сообщение/внутреннюю заметку (is_internal — только оператору, правило 10). */
+export async function addMessage(
+  id: string,
+  body: MessageInput,
+  deps?: ApiFetchDeps,
+): Promise<MessageRead> {
+  return postJson<MessageRead>(`${PREFIX}/requests/${id}/messages`, body, deps);
+}
+
+/** Контекст заявителя (E9, ПДн — только оператору/агенту). */
+export async function getRequesterContext(
+  id: string,
+  deps?: ApiFetchDeps,
+): Promise<RequesterContext> {
+  const response = await apiFetch(`${PREFIX}/requests/${id}/requester-context`, {}, deps);
+  return parseJson<RequesterContext>(response);
 }
