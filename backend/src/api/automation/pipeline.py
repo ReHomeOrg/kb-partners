@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.auth.principal import Principal, PrincipalKind
 from api.auth.scopes import STAFF_ADMIN_SCOPE
 from api.auth.system_actors import AUTOMATION_ACTOR_ID
+from api.automation.autonomy import AutonomyLevel
 from api.channels.dispatch import DispatchService
 from api.channels.resolver import ChannelResolver
 from api.classifier.engine import ClassifierEngine
@@ -58,6 +59,7 @@ class AutomationDeps:
     resolver: ChannelResolver
     policy: SlaPolicy
     require_service_order: bool
+    autonomy: AutonomyLevel = AutonomyLevel.DISPATCH
 
 
 async def run_on_create(session: AsyncSession, request_id: uuid.UUID, deps: AutomationDeps) -> str:
@@ -73,6 +75,10 @@ async def run_on_create(session: AsyncSession, request_id: uuid.UUID, deps: Auto
         if exc.status != 409:  # 409 — уже классифицирована (повтор); прочее пробрасываем
             raise
 
+    # Политика автономности (FR-9.3): дальше — только по разрешённому уровню.
+    if deps.autonomy < AutonomyLevel.ASSIGN:
+        return "classified"
+
     assign = AssignmentService(
         session, deps.platform, deps.matcher, require_service_order=deps.require_service_order
     )
@@ -83,6 +89,9 @@ async def run_on_create(session: AsyncSession, request_id: uuid.UUID, deps: Auto
             return "no_partner"  # нет пригодного партнёра → human-handoff
         if exc.status != 409:
             raise
+
+    if deps.autonomy < AutonomyLevel.DISPATCH:
+        return "assigned"
 
     dispatch = DispatchService(session, deps.resolver, deps.policy)
     try:

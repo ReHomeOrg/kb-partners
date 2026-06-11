@@ -13,6 +13,7 @@ import time
 import dramatiq
 import httpx
 
+from api.automation.autonomy import parse_autonomy
 from api.automation.pipeline import AutomationDeps, drain_on_create_batch
 from api.channels.dispatch import drain_dispatch_batch
 from api.channels.resolver import HttpChannelResolver
@@ -72,6 +73,7 @@ def _automation_deps(settings: Settings, platform: HttpPlatformClient) -> Automa
         resolver=HttpChannelResolver(settings),
         policy=SlaPolicy.from_settings(settings),
         require_service_order=bool(settings.platform_api_token),
+        autonomy=parse_autonomy(settings.automation_autonomy_level),
     )
 
 

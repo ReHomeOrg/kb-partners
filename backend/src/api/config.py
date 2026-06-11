@@ -253,6 +253,13 @@ class Settings(BaseSettings):
             "outbox-задачу, воркер прогоняет classify→assign→dispatch системным субъектом."
         ),
     )
+    automation_autonomy_level: str = Field(
+        default="dispatch",
+        description=(
+            "Политика автономности (E9, FR-9.3): classify / assign / dispatch — как далеко "
+            "авто-пайплайн ведёт заявку без человека. Неизвестное → conservative classify."
+        ),
+    )
 
 
 @lru_cache(maxsize=1)

@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.automation.autonomy import AutonomyLevel
 from api.automation.pipeline import AutomationDeps, drain_on_create_batch, run_on_create
 from api.channels.enums import ChannelType, DeliveryOutcome, HealthStatus
 from api.channels.models import DispatchAttempt, PartnerChannelConfig
@@ -85,7 +86,9 @@ def _candidate(cid: str) -> CollaboratorCandidate:
     )
 
 
-def _deps(candidates: list[CollaboratorCandidate]) -> AutomationDeps:
+def _deps(
+    candidates: list[CollaboratorCandidate], *, autonomy: AutonomyLevel = AutonomyLevel.DISPATCH
+) -> AutomationDeps:
     settings = Settings()
     return AutomationDeps(
         engine=ClassifierEngine(NullLLMProvider()),
@@ -95,6 +98,7 @@ def _deps(candidates: list[CollaboratorCandidate]) -> AutomationDeps:
         resolver=_SentResolver(),
         policy=SlaPolicy.from_settings(settings),
         require_service_order=False,
+        autonomy=autonomy,
     )
 
 
@@ -180,6 +184,28 @@ async def test_drain_on_create_batch_runs_pipeline(session: AsyncSession) -> Non
     assert processed == 1
     refreshed = await session.get(ServiceRequest, req.id)
     assert refreshed is not None and refreshed.status is RequestStatus.DISPATCHED
+
+
+async def test_autonomy_classify_only_stops_at_classified(session: AsyncSession) -> None:
+    req = await _seed_new(session)
+    await _seed_channel(session)
+    outcome = await run_on_create(
+        session, req.id, _deps([_candidate("c-1")], autonomy=AutonomyLevel.CLASSIFY)
+    )
+    assert outcome == "classified"
+    refreshed = await session.get(ServiceRequest, req.id)
+    assert refreshed is not None and refreshed.status is RequestStatus.CLASSIFIED
+
+
+async def test_autonomy_assign_stops_at_assigned(session: AsyncSession) -> None:
+    req = await _seed_new(session)
+    await _seed_channel(session)
+    outcome = await run_on_create(
+        session, req.id, _deps([_candidate("c-1")], autonomy=AutonomyLevel.ASSIGN)
+    )
+    assert outcome == "assigned"
+    refreshed = await session.get(ServiceRequest, req.id)
+    assert refreshed is not None and refreshed.status is RequestStatus.ASSIGNED
 
 
 async def test_pipeline_low_confidence_stops_at_needs_review(session: AsyncSession) -> None:
