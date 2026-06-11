@@ -125,11 +125,3 @@ async def send_email(
         _logger.warning("smtp degraded: %s number=%s", type(exc).__name__, notice.number)
         return False
     return True
-
-
-def send_push(notice: NotificationNotice, settings: Settings) -> bool:
-    """Web-push (VAPID) — seam до M11 (нужен store подписок + SW портала)."""
-    if not settings.notify_push_token:
-        return False
-    _logger.info("push notification pending web-push (M11): number=%s", notice.number)
-    return True

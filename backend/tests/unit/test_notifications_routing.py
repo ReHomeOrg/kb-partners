@@ -10,15 +10,8 @@ import httpx
 from api.clients.platform.models import CollaboratorCandidate, PartnerContact, ServiceOrderRef
 from api.clients.rehome.models import RequesterContext, SettlementRef
 from api.config import Settings
-from api.notifications.channels import (
-    NotificationNotice,
-    Recipient,
-    send_email,
-    send_push,
-    send_sms,
-)
+from api.notifications.channels import NotificationNotice, send_email, send_sms
 from api.notifications.contacts import NeighborContactResolver
-from api.notifications.drainer import deliver_notification
 from api.notifications.events import NotifyAudience, notifications_for
 from api.requests.enums import RequestStatus
 
@@ -70,8 +63,6 @@ async def test_channels_inert_until_configured() -> None:
     notice = _notice()
     assert await send_sms(notice, "+79001112233", off) is False
     assert await send_email(notice, "u@example.com", off) is False
-    assert send_push(notice, off) is False
-    assert await deliver_notification(notice, Recipient(phone="+7", email="u@e.com"), off) == 0
 
 
 async def test_sms_ru_delivers_when_configured() -> None:

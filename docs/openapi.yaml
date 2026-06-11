@@ -952,6 +952,54 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /api/v1/partners/push/subscriptions:
+    post:
+      tags: [Push]
+      summary: Зарегистрировать web-push подписку браузера (E8, FR-10.1)
+      operationId: subscribePush
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PushSubscriptionCreate"
+      responses:
+        "200":
+          description: Подписка сохранена (идемпотентно по endpoint владельца).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PushSubscriptionAck"
+        "401":
+          description: Не аутентифицирован.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags: [Push]
+      summary: Отписать устройство по endpoint
+      operationId: unsubscribePush
+      parameters:
+        - name: endpoint
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Подписка удалена (если была у владельца).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PushSubscriptionAck"
+        "401":
+          description: Не аутентифицирован.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
 components:
   securitySchemes:
     bearerAuth:
@@ -989,6 +1037,33 @@ components:
             type: object
             additionalProperties:
               type: string
+
+    # --- Web-push подписки (E8, FR-10.1) ---
+    PushSubscriptionCreate:
+      type: object
+      required: [endpoint, keys]
+      properties:
+        endpoint:
+          type: string
+          maxLength: 2048
+        keys:
+          type: object
+          required: [p256dh, auth]
+          properties:
+            p256dh:
+              type: string
+            auth:
+              type: string
+          additionalProperties: false
+      additionalProperties: false
+
+    PushSubscriptionAck:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+      additionalProperties: false
 
     # --- Заявки (E1) ---
     ChannelIn:

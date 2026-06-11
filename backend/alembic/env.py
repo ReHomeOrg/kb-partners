@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 # Каждый доменный пакет регистрирует свои таблицы в Base.metadata здесь.
 import api.channels.models  # noqa: F401
 import api.outbox.models  # noqa: F401
+import api.push.models  # noqa: F401
 import api.requests.models  # noqa: F401
 # ...
 from api.config import get_settings

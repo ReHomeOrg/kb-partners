@@ -303,8 +303,16 @@ class Settings(BaseSettings):
             "FSM (E8). Дефолт False → уведомления не ставятся в outbox (ручной режим)."
         ),
     )
-    notify_push_token: str = Field(
-        default="", description="Креденшл push-провайдера (web-push VAPID — ADR-0003a/M11)."
+    # Web-push (VAPID, RFC 8291/8188, ADR-0004) — self-hosted через pywebpush. ПУСТОЙ
+    # vapid_private_key → push-канал инертен. Ключи — ссылкой на kb-vault.
+    vapid_private_key: str = Field(
+        default="", description="VAPID private key (PEM/base64url). ПУСТО → web-push инертен."
+    )
+    vapid_public_key: str = Field(
+        default="", description="VAPID public key (application server key для фронта)."
+    )
+    vapid_subject: str = Field(
+        default="", description="VAPID subject (mailto:ops@... или https URL контакта)."
     )
     # SMS — боевой провайдер SMS.ru (ADR-0004). Свой HTTP-адаптер, без SDK. ПУСТОЙ
     # api_id → SMS-канал инертен. Секрет — ссылкой на kb-vault.

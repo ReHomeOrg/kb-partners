@@ -1,9 +1,10 @@
 """Воркерный дрейн уведомлений из outbox (E8, NFR-8): резолв контакта + веер каналов.
 
-Для каждого `notification`-сообщения: резолвим контакт адресата (ПДн, на дрейне, не в
-outbox), затем best-effort веер push/SMS/email по доступным контактам. Сбой одного
-канала не валит прочие. Недоступность боевого канала (ExternalServiceError) → backoff-
-повтор всего сообщения (как в webhooks-дрейнере); прочие сбои канала изолированы.
+Для каждого `notification`-сообщения: резолвим контакт адресата (телефон/email — ПДн,
+на дрейне, не в outbox) + грузим web-push подписки владельца, затем best-effort веер
+SMS/email/web-push. Сбой одного канала не валит прочие. Недоступность боевого канала
+(ExternalServiceError) → backoff-повтор всего сообщения. Истёкшая web-push подписка
+(404/410) удаляется.
 """
 
 from __future__ import annotations
@@ -15,19 +16,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.clients.errors import ExternalServiceError
 from api.config import Settings
-from api.notifications.channels import (
-    NotificationNotice,
-    Recipient,
-    send_email,
-    send_push,
-    send_sms,
-)
+from api.notifications.channels import NotificationNotice, Recipient, send_email, send_sms
 from api.notifications.contacts import ContactResolver
 from api.notifications.emitter import NOTIFICATION_KIND
 from api.notifications.events import NotifyAudience
 from api.observability.logging import get_logger
 from api.outbox.models import OutboxMessage
 from api.outbox.repository import OutboxRepository
+from api.push.repository import PushSubscriptionRepository
+from api.push.webpush import SubscriptionExpired, send_webpush
 
 _logger = get_logger("notifications.drain")
 
@@ -51,24 +48,51 @@ def _opt(value: object) -> str | None:
     return str(value) if value else None
 
 
-async def deliver_notification(
-    notice: NotificationNotice, recipient: Recipient, settings: Settings
+def _push_owner(notice: NotificationNotice) -> str | None:
+    """Владелец web-push подписок для адресата (заявитель/партнёр). Оператор — без push."""
+    if notice.audience is NotifyAudience.USER:
+        return notice.requester_id
+    if notice.audience is NotifyAudience.PARTNER:
+        return notice.partner_id
+    return None
+
+
+async def _deliver_push(
+    session: AsyncSession, notice: NotificationNotice, settings: Settings
 ) -> int:
-    """Веер уведомления по каналам для известных контактов. Возвращает число попыток.
+    """Web-push по подпискам владельца. Истёкшие (404/410) удаляет. Возвращает число доставок."""
+    if not settings.vapid_private_key:
+        return 0
+    owner_id = _push_owner(notice)
+    if owner_id is None:
+        return 0
+    repo = PushSubscriptionRepository(session)
+    delivered = 0
+    for sub in await repo.list_for_owner(owner_id):
+        try:
+            if await send_webpush(
+                sub, number=notice.number, summary=notice.summary, settings=settings
+            ):
+                delivered += 1
+        except SubscriptionExpired:
+            await repo.delete(owner_id=owner_id, endpoint=sub.endpoint)
+    return delivered
+
+
+async def deliver_notification(
+    session: AsyncSession, notice: NotificationNotice, recipient: Recipient, settings: Settings
+) -> int:
+    """Веер уведомления (SMS/email/web-push) по известным контактам/подпискам.
 
     `ExternalServiceError` (боевой канал недоступен) пробрасывается → backoff-повтор;
     прочие сбои канала изолированы (best-effort).
     """
     attempted = 0
-    # SMS — по телефону; ExternalServiceError всплывает наверх (повтор сообщения).
     if await send_sms(notice, recipient.phone, settings):
         attempted += 1
-    # Email — best-effort (SMTP-сбои уже изолированы внутри send_email → False).
     if await send_email(notice, recipient.email, settings):
         attempted += 1
-    # Push — seam (web-push M11), без ПДн-контакта.
-    if send_push(notice, settings):
-        attempted += 1
+    attempted += await _deliver_push(session, notice, settings)
     return attempted
 
 
@@ -85,12 +109,13 @@ async def drain_notification_batch(
         visibility_timeout=settings.outbox_visibility_timeout_seconds,
     )
     for message in batch:
-        await _drain_one(repo, message, settings=settings, resolver=resolver, now=now)
+        await _drain_one(session, repo, message, settings=settings, resolver=resolver, now=now)
     await session.commit()
     return len(batch)
 
 
 async def _drain_one(
+    session: AsyncSession,
     repo: OutboxRepository,
     message: OutboxMessage,
     *,
@@ -104,7 +129,7 @@ async def _drain_one(
         return
     try:
         recipient = await resolver.resolve(notice)
-        attempted = await deliver_notification(notice, recipient, settings)
+        attempted = await deliver_notification(session, notice, recipient, settings)
     except ExternalServiceError as exc:  # боевой канал/сосед недоступен → backoff-повтор
         delay = settings.outbox_retry_base_seconds * (2 ** (message.attempts - 1))
         repo.mark_failed_or_retry(

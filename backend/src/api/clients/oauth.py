@@ -64,7 +64,7 @@ class ClientCredentialsTokenProvider:
         payload = await _post_token(self._token_url, data, self._timeout, self._transport)
         self._cached = str(payload["access_token"])
         expires_in = payload.get("expires_in", 60)
-        ttl = float(expires_in) if isinstance(expires_in, (int, float, str)) else 60.0
+        ttl = float(expires_in) if isinstance(expires_in, int | float | str) else 60.0
         self._expires_at = self._now() + max(0.0, ttl - _EXPIRY_SKEW_SECONDS)
         return self._cached
 
