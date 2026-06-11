@@ -244,6 +244,27 @@ class Settings(BaseSettings):
         default="", description="Секрет HMAC-подписи исходящих webhooks (X-Signature)."
     )
 
+    # --- Уведомления (E8, FR-8.1/8.2, §4.9). Эмиссия в outbox при переходах FSM,
+    # доставка после commit воркером по seam-каналам push/SMS/email. Мастер-гейт
+    # `notifications_enabled` (дефолт False → outbox-строки не плодятся); каждый
+    # канал включается своим креденшлом (пусто → seam инертен, лог намерения). ---
+    notifications_enabled: bool = Field(
+        default=False,
+        description=(
+            "Включает эмиссию уведомлений заявителю/партнёру/оператору при переходах "
+            "FSM (E8). Дефолт False → уведомления не ставятся в outbox (ручной режим)."
+        ),
+    )
+    notify_push_token: str = Field(
+        default="", description="Креденшл push-провайдера. ПУСТО → push-seam инертен."
+    )
+    notify_sms_token: str = Field(
+        default="", description="Креденшл SMS-шлюза (РФ). ПУСТО → SMS-seam инертен."
+    )
+    notify_smtp_host: str = Field(
+        default="", description="SMTP-хост уведомлений (РФ). ПУСТО → email-seam инертен."
+    )
+
     # --- Автоматизация (E6, §6.6, FR-6.3). On_create-пайплайн (классификация→подбор→
     # диспетчеризация) асинхронно через outbox. ПУСТО/False → инертно (ручной режим). ---
     automation_on_create_enabled: bool = Field(

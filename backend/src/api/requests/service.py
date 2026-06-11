@@ -27,6 +27,7 @@ from api.clients.platform.protocol import PlatformClient
 from api.config import get_settings
 from api.errors import ProblemException
 from api.matching.engine import Matcher
+from api.notifications.emitter import emit_notifications
 from api.observability.logging import get_logger
 from api.observability.pii_mask import mask_pii
 from api.outbox.repository import OutboxRepository
@@ -128,6 +129,8 @@ def apply_transition(
         number=request.number,
         status=target,
     )
+    # Уведомления заявителю/партнёру/оператору (E8, FR-8.1/8.2) — если включены.
+    emit_notifications(session, request_id=request.id, number=request.number, status=target)
 
 
 def build_detail(principal: Principal, request: ServiceRequest) -> RequestDetail:
@@ -313,6 +316,14 @@ class IntakeService:
         emit_event(
             self._session,
             event="request.created",
+            request_id=request.id,
+            number=request.number,
+            status=RequestStatus.NEW,
+        )
+        # FR-8.1: уведомить заявителя «заявка принята» (NEW создаётся не через
+        # apply_transition, поэтому эмитим явно). Инертно, пока уведомления выключены.
+        emit_notifications(
+            self._session,
             request_id=request.id,
             number=request.number,
             status=RequestStatus.NEW,

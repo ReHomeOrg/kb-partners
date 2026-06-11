@@ -26,6 +26,7 @@ from api.clients.platform.adapter import HttpPlatformClient
 from api.config import Settings, get_settings
 from api.db import async_session_factory
 from api.matching.engine import Matcher
+from api.notifications.drainer import drain_notification_batch
 from api.observability.logging import get_logger
 from api.sla.engine import SlaPolicy
 from api.tasks.broker import broker  # noqa: F401 — импорт устанавливает брокер
@@ -110,3 +111,16 @@ def drain_outbox_webhook() -> None:
     """Доставить исходящие webhooks подписчику (E8, после commit)."""
     processed = asyncio.run(_drain_webhooks())
     _logger.info("outbox webhook drain: processed=%d", processed)
+
+
+async def _drain_notifications() -> int:
+    settings = get_settings()
+    async with async_session_factory() as session:
+        return await drain_notification_batch(session, settings=settings)
+
+
+@dramatiq.actor(max_retries=0)
+def drain_outbox_notification() -> None:
+    """Разослать уведомления заявителю/партнёру/оператору по seam-каналам (E8)."""
+    processed = asyncio.run(_drain_notifications())
+    _logger.info("outbox notification drain: processed=%d", processed)
