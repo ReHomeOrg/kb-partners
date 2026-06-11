@@ -44,6 +44,7 @@ from api.requests.enums import (
     RequestStatus,
 )
 from api.requests.fsm import allowed_transitions, ensure_transition
+from api.requests.metrics import record_transition
 from api.requests.models import RequestHistory, RequestMessage, ServiceRequest
 from api.requests.pagination import decode_cursor, encode_cursor
 from api.requests.repository import RequestListFilters, RequestRepository
@@ -96,10 +97,11 @@ def apply_transition(
     """
     previous = request.status
     ensure_transition(previous, target)
+    transitioned_at = datetime.datetime.now(datetime.UTC)
     request.status = target
     timestamp_field = _STATUS_TIMESTAMP.get(target)
     if timestamp_field is not None:
-        setattr(request, timestamp_field, datetime.datetime.now(datetime.UTC))
+        setattr(request, timestamp_field, transitioned_at)
     session.add(
         RequestHistory(
             request_id=request.id,
@@ -108,6 +110,13 @@ def apply_transition(
             from_value=previous.value,
             to_value=target.value,
         )
+    )
+    record_transition(
+        target=target,
+        at=transitioned_at,
+        created_at=request.created_at,
+        dispatched_at=request.dispatched_at,
+        accepted_at=request.accepted_at,
     )
 
 
