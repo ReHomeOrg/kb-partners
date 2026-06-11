@@ -11,6 +11,18 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
+class ServiceOrderRef:
+    """Ссылка на заказ `ServiceOrder` в kb-platform (E3, FR-3.5, ADR-0002).
+
+    Заказ остаётся в kb-platform; kb-partners хранит только ссылку (`id`) и
+    наблюдаемый статус. Деньги/escrow считает платёжный контур, не модуль.
+    """
+
+    id: str
+    status: str
+
+
+@dataclass(frozen=True)
 class CollaboratorCandidate:
     """Кандидат-партнёр для подбора (FR-3.1). Поля — то, что нужно ранжированию.
 

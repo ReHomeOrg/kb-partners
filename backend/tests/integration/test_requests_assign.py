@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.principal import Principal, PrincipalKind
-from api.clients.platform.models import CollaboratorCandidate
+from api.clients.platform.models import CollaboratorCandidate, ServiceOrderRef
 from api.main import app
 from api.matching.engine import Matcher
 from api.requests.dependencies import get_assignment_service
@@ -31,15 +31,23 @@ def _principal(kind: PrincipalKind, **kwargs: Any) -> Principal:
 
 
 class _FakePlatformClient:
-    """Фейковый реестр: отдаёт заданных кандидатов, фильтруя по категории."""
+    """Фейковый реестр: кандидаты по категории + заданный результат ServiceOrder."""
 
-    def __init__(self, candidates: list[CollaboratorCandidate]) -> None:
+    def __init__(
+        self, candidates: list[CollaboratorCandidate], order_ref: ServiceOrderRef | None = None
+    ) -> None:
         self._candidates = candidates
+        self._order_ref = order_ref
 
     async def search_candidates(
         self, *, category: str, service_area: str | None = None
     ) -> list[CollaboratorCandidate]:
         return [c for c in self._candidates if c.category == category]
+
+    async def create_service_order(
+        self, *, request_id: str, partner_id: str, category: str, idempotency_key: str
+    ) -> ServiceOrderRef | None:
+        return self._order_ref
 
 
 def _candidate(
@@ -57,9 +65,20 @@ def _candidate(
     )
 
 
-def _use_candidates(session: AsyncSession, candidates: list[CollaboratorCandidate]) -> None:
+def _use_candidates(
+    session: AsyncSession,
+    candidates: list[CollaboratorCandidate],
+    *,
+    require_order: bool = False,
+    order_ref: ServiceOrderRef | None = None,
+) -> None:
     async def _dep() -> AsyncIterator[AssignmentService]:
-        yield AssignmentService(session, _FakePlatformClient(candidates), Matcher())
+        yield AssignmentService(
+            session,
+            _FakePlatformClient(candidates, order_ref),
+            Matcher(),
+            require_service_order=require_order,
+        )
 
     app.dependency_overrides[get_assignment_service] = _dep
 
@@ -178,6 +197,36 @@ async def test_match_trace_hidden_from_requester(
     assert body["partner_id"] == "c-2"
     assert body["match_trace"] is None
     assert body["fallback_chain"] is None
+
+
+async def test_auto_assign_creates_service_order(
+    make_client: Callable[..., AsyncClient], session: AsyncSession
+) -> None:
+    operator = _principal(PrincipalKind.OPERATOR)
+    req = await _seed_classified(session)
+    _use_candidates(
+        session,
+        [_candidate("c-1", rating=4.0)],
+        require_order=True,
+        order_ref=ServiceOrderRef(id="so-1", status="DRAFT"),
+    )
+    resp = await make_client(operator).post(f"{_BASE}/{req.id}/assign", json={})
+    assert resp.status_code == 200
+    assert resp.json()["service_order_id"] == "so-1"
+
+
+async def test_assign_502_when_service_order_unavailable(
+    make_client: Callable[..., AsyncClient], session: AsyncSession
+) -> None:
+    operator = _principal(PrincipalKind.OPERATOR)
+    req = await _seed_classified(session)
+    _use_candidates(session, [_candidate("c-1", rating=4.0)], require_order=True, order_ref=None)
+    resp = await make_client(operator).post(f"{_BASE}/{req.id}/assign", json={})
+    assert resp.status_code == 502
+    # Заказ не создан → ничего не закоммичено: заявка осталась в исходном статусе.
+    refreshed = await session.get(ServiceRequest, req.id)
+    assert refreshed is not None
+    assert refreshed.status is RequestStatus.CLASSIFIED
 
 
 async def _seed_classified(

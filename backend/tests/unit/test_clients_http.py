@@ -208,6 +208,40 @@ async def test_search_candidates_malformed_json_degrades(noop_sleep: SleepFn) ->
     assert await client.search_candidates(category="CLEANING") == []
 
 
+async def test_create_service_order_maps_and_sends_idempotency_key(
+    noop_sleep: SleepFn,
+) -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        assert req.method == "POST"
+        assert req.headers["authorization"] == "Bearer tok"
+        assert req.headers["idempotency-key"] == "assign:r1"
+        return httpx.Response(201, json={"id": "so-1", "status": "DRAFT"})
+
+    client = _platform(handler, noop_sleep)
+    ref = await client.create_service_order(
+        request_id="r1", partner_id="c-1", category="CLEANING", idempotency_key="assign:r1"
+    )
+    assert ref is not None
+    assert ref.id == "so-1"
+    assert ref.status == "DRAFT"
+
+
+async def test_create_service_order_degrades_on_5xx(noop_sleep: SleepFn) -> None:
+    client = _platform(lambda req: httpx.Response(503), noop_sleep)
+    ref = await client.create_service_order(
+        request_id="r1", partner_id="c-1", category="CLEANING", idempotency_key="k"
+    )
+    assert ref is None
+
+
+async def test_create_service_order_malformed_json_degrades(noop_sleep: SleepFn) -> None:
+    client = _platform(lambda req: httpx.Response(201, content=b"nope"), noop_sleep)
+    ref = await client.create_service_order(
+        request_id="r1", partner_id="c-1", category="CLEANING", idempotency_key="k"
+    )
+    assert ref is None
+
+
 def test_factory_builds_resilient_client() -> None:
     from api.clients.factory import build_resilient_client
     from api.config import Settings

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from api.clients.platform.models import CollaboratorCandidate
+from api.clients.platform.models import CollaboratorCandidate, ServiceOrderRef
 
 
 @runtime_checkable
@@ -18,4 +18,13 @@ class PlatformClient(Protocol):
         self, *, category: str, service_area: str | None = None
     ) -> list[CollaboratorCandidate]:
         """Кандидаты-партнёры реестра по категории (+ гео). `[]` при недоступности."""
+        ...
+
+    async def create_service_order(
+        self, *, request_id: str, partner_id: str, category: str, idempotency_key: str
+    ) -> ServiceOrderRef | None:
+        """Создать/привязать ServiceOrder в kb-platform (FR-3.5, идемпотентно по ключу).
+
+        `None` при недоступности соседа (вызывающий решает: повторить/эскалировать).
+        """
         ...

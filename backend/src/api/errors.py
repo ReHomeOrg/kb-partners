@@ -89,6 +89,16 @@ class ProblemException(Exception):
             detail=detail,
         )
 
+    @classmethod
+    def bad_gateway(cls, detail: str | None = None) -> ProblemException:
+        """502 — сбой оркестрации соседнего сервиса (например, kb-platform недоступен)."""
+        return cls(
+            status=502,
+            title="Bad Gateway",
+            type_=f"{_ERROR_BASE}/bad-gateway",
+            detail=detail,
+        )
+
 
 def render_problem(exc: ProblemException) -> JSONResponse:
     """Собрать problem+json ответ из `ProblemException`."""

@@ -131,6 +131,7 @@ def build_detail(principal: Principal, request: ServiceRequest) -> RequestDetail
         booking_id=request.booking_id,
         premises_id=request.premises_id,
         delivery_channel=request.delivery_channel,
+        service_order_id=request.service_order_id,
         updated_at=request.updated_at,
         raw_input=raw,
         classification=request.classification,
@@ -485,15 +486,26 @@ class AssignmentService:
 
     Авто-режим тянет кандидатов из реестра kb-platform (по HTTP, арх-константа),
     ранжирует (`Matcher`), пишет `partner_id`/`delivery_channel`/`fallback_chain`/
-    `match_trace` и ведёт FSM …→MATCHING→ASSIGNED. Создание `ServiceOrder` —
-    отдельный шаг (M2.4, FR-3.5, ADR-0002).
+    `match_trace`, создаёт/привязывает `ServiceOrder` в kb-platform (FR-3.5,
+    идемпотентно по ключу заявки, ADR-0002) и ведёт FSM …→MATCHING→ASSIGNED.
+
+    `require_service_order=False` (платёжный/реестровый контур не сконфигурирован,
+    dev) → оркестрация заказа пропускается (инертна, как прочие интеграции).
     """
 
-    def __init__(self, session: AsyncSession, platform: PlatformClient, matcher: Matcher) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        platform: PlatformClient,
+        matcher: Matcher,
+        *,
+        require_service_order: bool = False,
+    ) -> None:
         self._session = session
         self._repo = RequestRepository(session)
         self._platform = platform
         self._matcher = matcher
+        self._require_service_order = require_service_order
 
     async def assign(
         self, principal: Principal, request_id: uuid.UUID, body: AssignRequest
@@ -508,12 +520,17 @@ class AssignmentService:
             raise ProblemException.conflict(
                 detail=f"Assignment not allowed in status {request.status.value}"
             )
+        # ServiceOrder в kb-platform категоризован — без категории заказ не создать.
+        if request.category is None:
+            raise ProblemException.conflict(detail="Request must be classified before assignment")
+        category = request.category  # narrowed → Category
 
         if body.partner_id is not None:
             self._apply_manual(request, body.partner_id)
         else:
-            await self._apply_auto(request, body.service_area)
+            await self._apply_auto(request, category, body.service_area)
 
+        await self._orchestrate_service_order(request, category)
         self._route_to_assigned(principal, request)
         self._session.add(
             RequestHistory(
@@ -541,16 +558,14 @@ class AssignmentService:
         request.fallback_chain = []
         request.match_trace = {"method": "manual", "partner_id": partner_id}
 
-    async def _apply_auto(self, request: ServiceRequest, service_area: str | None) -> None:
+    async def _apply_auto(
+        self, request: ServiceRequest, category: Category, service_area: str | None
+    ) -> None:
         """Авто-подбор: кандидаты из реестра → ранжирование → запись результата."""
-        if request.category is None:
-            raise ProblemException.conflict(detail="Request must be classified before matching")
         candidates = await self._platform.search_candidates(
-            category=request.category.value, service_area=service_area
+            category=category.value, service_area=service_area
         )
-        result = self._matcher.rank(
-            candidates, category=request.category.value, service_area=service_area
-        )
+        result = self._matcher.rank(candidates, category=category.value, service_area=service_area)
         if result is None:
             # Нет пригодных партнёров — назначить нечего (human-handoff остаётся оператору).
             raise ProblemException.unprocessable(detail="No eligible partner found")
@@ -561,6 +576,26 @@ class AssignmentService:
             **result.match_trace,
             "matched_at": datetime.datetime.now(datetime.UTC).isoformat(),
         }
+
+    async def _orchestrate_service_order(self, request: ServiceRequest, category: Category) -> None:
+        """Создать/привязать ServiceOrder в kb-platform (FR-3.5, идемпотентно по заявке).
+
+        Инертно, если контур не сконфигурирован (dev). При недоступности соседа —
+        502: ничего не коммитим, повтор по тому же ключу не создаст дубль (ADR-0002).
+        """
+        if not self._require_service_order:
+            return
+        if request.partner_id is None:  # защита инварианта: партнёр уже выбран выше
+            raise ProblemException.conflict(detail="Partner must be selected before ServiceOrder")
+        ref = await self._platform.create_service_order(
+            request_id=str(request.id),
+            partner_id=request.partner_id,
+            category=category.value,
+            idempotency_key=f"assign:{request.id}",
+        )
+        if ref is None:
+            raise ProblemException.bad_gateway(detail="ServiceOrder orchestration failed")
+        request.service_order_id = ref.id
 
     def _route_to_assigned(self, principal: Principal, request: ServiceRequest) -> None:
         """Провести FSM в ASSIGNED через MATCHING (§7)."""

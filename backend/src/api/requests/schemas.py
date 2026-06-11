@@ -102,6 +102,7 @@ class RequestDetail(RequestRead):
     booking_id: str | None
     premises_id: str | None
     delivery_channel: str | None
+    service_order_id: str | None
     updated_at: datetime.datetime
     raw_input: str
     classification: dict[str, Any] | None

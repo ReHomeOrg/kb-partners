@@ -17,12 +17,13 @@ from api.clients.auth import TokenProvider
 from api.clients.base import ResilientHttpClient
 from api.clients.cache import Cache
 from api.clients.errors import ExternalServiceError
-from api.clients.platform.models import CollaboratorCandidate
+from api.clients.platform.models import CollaboratorCandidate, ServiceOrderRef
 from api.observability.logging import get_logger
 
 _logger = get_logger("clients.platform")
 
 _CANDIDATES_PATH = "/api/v1/collaborators"
+_SERVICE_ORDERS_PATH = "/api/v1/service-orders"
 
 
 def _map_candidate(
@@ -76,6 +77,39 @@ class HttpPlatformClient:
                 # не роняя весь подбор (деградация поэлементно).
                 _logger.warning("platform search_candidates: skipped malformed candidate")
         return candidates
+
+    async def create_service_order(
+        self, *, request_id: str, partner_id: str, category: str, idempotency_key: str
+    ) -> ServiceOrderRef | None:
+        """Создать/привязать ServiceOrder (FR-3.5). Идемпотентность — заголовком на m2m.
+
+        НЕ кешируется (запись). Деградация: недоступность/4xx/битый JSON → None + WARN.
+        """
+        token = await self._token_provider.get_token()
+        headers = {"Authorization": f"Bearer {token}", "Idempotency-Key": idempotency_key}
+        body = {"request_id": request_id, "partner_id": partner_id, "category": category}
+        try:
+            response = await self._http.request(
+                "POST",
+                _SERVICE_ORDERS_PATH,
+                operation="create_service_order",
+                headers=headers,
+                json=body,
+            )
+        except ExternalServiceError as exc:
+            _logger.warning("platform create_service_order degraded: %s", type(exc).__name__)
+            return None
+        if response.status_code >= 400:
+            _logger.warning(
+                "platform create_service_order degraded: status=%d", response.status_code
+            )
+            return None
+        try:
+            payload: dict[str, Any] = response.json()
+            return ServiceOrderRef(id=str(payload["id"]), status=str(payload["status"]))
+        except (ValueError, KeyError, TypeError, json.JSONDecodeError):
+            _logger.warning("platform create_service_order degraded: malformed JSON")
+            return None
 
     async def _fetch_candidates(
         self, category: str, service_area: str | None, cache_key: str

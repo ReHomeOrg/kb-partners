@@ -87,7 +87,12 @@ async def get_assignment_service(
             cache=_PLATFORM_CACHE,
             cache_ttl_seconds=settings.platform_cache_ttl_seconds,
         )
-        yield AssignmentService(session, platform, Matcher())
+        yield AssignmentService(
+            session,
+            platform,
+            Matcher(),
+            require_service_order=bool(settings.platform_api_token),
+        )
 
 
 def get_list_filters(
