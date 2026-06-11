@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+import datetime
+import uuid
 from typing import Any
 
 from sqlalchemy.exc import IntegrityError
@@ -23,12 +25,58 @@ from api.auth.principal import Principal, PrincipalKind
 from api.errors import ProblemException
 from api.observability.logging import get_logger
 from api.observability.pii_mask import mask_pii
-from api.requests.enums import AccessLevel, ChannelIn, HistoryAction, RequestStatus
-from api.requests.models import RequestHistory, ServiceRequest
-from api.requests.repository import RequestRepository
-from api.requests.schemas import FromChatCreate, FromTicketCreate, RequestCreate
+from api.requests.access import (
+    can_cancel,
+    can_drive_lifecycle,
+    can_see_raw_input,
+    can_view_internal,
+)
+from api.requests.enums import (
+    AccessLevel,
+    AuthorType,
+    ChannelIn,
+    HistoryAction,
+    RequestStatus,
+)
+from api.requests.fsm import allowed_transitions, ensure_transition
+from api.requests.models import RequestHistory, RequestMessage, ServiceRequest
+from api.requests.pagination import decode_cursor, encode_cursor
+from api.requests.repository import RequestListFilters, RequestRepository
+from api.requests.schemas import (
+    FromChatCreate,
+    FromTicketCreate,
+    MessageCreate,
+    MessageRead,
+    RequestCreate,
+    RequestDetail,
+    RequestListResponse,
+    RequestRead,
+    TransitionRequest,
+)
 
 _logger = get_logger("requests.intake")
+
+# Список → таймстемп жизненного цикла, проставляемый при входе в статус (§6.1).
+_STATUS_TIMESTAMP: dict[RequestStatus, str] = {
+    RequestStatus.DISPATCHED: "dispatched_at",
+    RequestStatus.ACCEPTED: "accepted_at",
+    RequestStatus.DONE: "done_at",
+    RequestStatus.ACCEPTED_BY_USER: "accepted_by_user_at",
+    RequestStatus.PAID: "paid_at",
+}
+
+# Тип субъекта → автор сообщения (§6.2). Агент действует как ИИ.
+_AUTHOR_BY_KIND: dict[PrincipalKind, AuthorType] = {
+    PrincipalKind.REQUESTER: AuthorType.REQUESTER,
+    PrincipalKind.OPERATOR: AuthorType.OPERATOR,
+    PrincipalKind.PARTNER: AuthorType.PARTNER,
+    PrincipalKind.AGENT: AuthorType.AI,
+    PrincipalKind.SERVICE: AuthorType.SYSTEM,
+}
+
+# Потолок размера страницы списка (§11 курсорная пагинация; анти-абьюз NFR-11).
+_MAX_PAGE_LIMIT = 100
+_DEFAULT_PAGE_LIMIT = 50
 
 
 class IntakeService:
@@ -169,3 +217,153 @@ class IntakeService:
             request.status.value,
         )
         return request, True
+
+
+class RequestService:
+    """Чтение и жизненный цикл заявок (M1.3): карточка, список, переходы FSM,
+    сообщения/заметки, отмена.
+
+    Видимость (контур + владение) проверяется ПЕРЕД авторизацией действия: невидимый
+    ресурс → 404, видимый-но-без-прав → 403 (анти-enumeration, §12).
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+        self._repo = RequestRepository(session)
+
+    async def get_detail(self, principal: Principal, request_id: uuid.UUID) -> RequestDetail:
+        request = await self._repo.get_visible(principal, request_id)
+        if request is None:
+            raise ProblemException.not_found()
+        return self._to_detail(principal, request)
+
+    async def list_requests(
+        self,
+        principal: Principal,
+        filters: RequestListFilters,
+        *,
+        cursor: str | None,
+        limit: int | None,
+    ) -> RequestListResponse:
+        page_limit = min(limit or _DEFAULT_PAGE_LIMIT, _MAX_PAGE_LIMIT)
+        decoded = decode_cursor(cursor) if cursor else None
+        rows = await self._repo.list_visible(principal, filters, cursor=decoded, limit=page_limit)
+        has_more = len(rows) > page_limit
+        items = rows[:page_limit]
+        next_cursor = (
+            encode_cursor(items[-1].created_at, items[-1].id) if has_more and items else None
+        )
+        return RequestListResponse(
+            items=[RequestRead.model_validate(r) for r in items],
+            next_cursor=next_cursor,
+        )
+
+    async def transition(
+        self, principal: Principal, request_id: uuid.UUID, body: TransitionRequest
+    ) -> RequestDetail:
+        request = await self._repo.get_visible(principal, request_id, for_update=True)
+        if request is None:
+            raise ProblemException.not_found()
+        if not can_drive_lifecycle(principal):
+            raise ProblemException.forbidden(detail="Lifecycle transition not allowed for subject")
+        self._apply_transition(principal, request, body.target)
+        # Карточку строим ДО commit: объект, загруженный с FOR UPDATE, после commit
+        # экспайрится (блокировка снята → данные потенциально устарели), и ленивое
+        # дочитывание в async-контексте упало бы.
+        detail = self._to_detail(principal, request)
+        await self._session.commit()
+        return detail
+
+    async def cancel(
+        self, principal: Principal, request_id: uuid.UUID, reason: str
+    ) -> RequestDetail:
+        request = await self._repo.get_visible(principal, request_id, for_update=True)
+        if request is None:
+            raise ProblemException.not_found()
+        if not can_cancel(principal):
+            raise ProblemException.forbidden(detail="Cancellation not allowed for subject")
+        self._apply_transition(principal, request, RequestStatus.CANCELLED)
+        request.custom_fields = {**request.custom_fields, "cancellation": {"reason": reason}}
+        detail = self._to_detail(principal, request)  # до commit (FOR UPDATE экспайрит)
+        await self._session.commit()
+        return detail
+
+    async def add_message(
+        self, principal: Principal, request_id: uuid.UUID, body: MessageCreate
+    ) -> MessageRead:
+        request = await self._repo.get_visible(principal, request_id)
+        if request is None:
+            raise ProblemException.not_found()
+        if body.is_internal and not can_view_internal(principal):
+            raise ProblemException.forbidden(detail="Internal notes are operator-only")
+        message = RequestMessage(
+            request_id=request.id,
+            author_type=_AUTHOR_BY_KIND[principal.kind],
+            author_id=str(principal.user_id),
+            is_internal=body.is_internal,
+            text=body.text,
+            attachments=[a.model_dump() for a in body.attachments],
+        )
+        self._repo.add_message(message)
+        await self._session.flush()
+        self._session.add(
+            RequestHistory(
+                request_id=request.id,
+                actor_id=principal.on_behalf_of or principal.user_id,
+                action=HistoryAction.MESSAGE_ADDED,
+                to_value=str(message.id),
+            )
+        )
+        await self._session.commit()
+        return MessageRead.model_validate(message)
+
+    async def list_messages(self, principal: Principal, request_id: uuid.UUID) -> list[MessageRead]:
+        request = await self._repo.get_visible(principal, request_id)
+        if request is None:
+            raise ProblemException.not_found()
+        messages = await self._repo.list_messages(
+            request.id, include_internal=can_view_internal(principal)
+        )
+        return [MessageRead.model_validate(m) for m in messages]
+
+    def _apply_transition(
+        self, principal: Principal, request: ServiceRequest, target: RequestStatus
+    ) -> None:
+        """Сменить статус с валидацией FSM (§7, запрещённый → 409) и записью аудита."""
+        previous = request.status
+        ensure_transition(previous, target)
+        request.status = target
+        timestamp_field = _STATUS_TIMESTAMP.get(target)
+        if timestamp_field is not None:
+            setattr(request, timestamp_field, datetime.datetime.now(datetime.UTC))
+        self._session.add(
+            RequestHistory(
+                request_id=request.id,
+                actor_id=principal.on_behalf_of or principal.user_id,
+                action=HistoryAction.STATUS_CHANGED,
+                from_value=previous.value,
+                to_value=target.value,
+            )
+        )
+
+    @staticmethod
+    def _to_detail(principal: Principal, request: ServiceRequest) -> RequestDetail:
+        raw = (
+            request.raw_input if can_see_raw_input(principal, request) else request.raw_input_masked
+        )
+        return RequestDetail(
+            id=request.id,
+            number=request.number,
+            requester_id=request.requester_id,
+            channel_in=request.channel_in,
+            category=request.category,
+            status=request.status,
+            created_at=request.created_at,
+            partner_id=request.partner_id,
+            product_code=request.product_code,
+            booking_id=request.booking_id,
+            premises_id=request.premises_id,
+            updated_at=request.updated_at,
+            raw_input=raw,
+            allowed_transitions=sorted(allowed_transitions(request.status), key=lambda s: s.value),
+        )

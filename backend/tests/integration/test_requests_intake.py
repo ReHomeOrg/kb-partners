@@ -10,62 +10,18 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import Callable
 from typing import Any
 
-import pytest_asyncio
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.pool import NullPool
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.auth.dependencies import get_current_principal
 from api.auth.principal import Principal, PrincipalKind
-from api.config import get_settings
-from api.db import get_session
-from api.main import app
 from api.requests.enums import ChannelIn, HistoryAction, RequestStatus
 from api.requests.models import RequestHistory, ServiceRequest
 
-
-@pytest_asyncio.fixture
-async def session() -> AsyncIterator[AsyncSession]:
-    engine = create_async_engine(get_settings().database_url, poolclass=NullPool)
-    conn = await engine.connect()
-    trans = await conn.begin()
-    sess = AsyncSession(bind=conn, join_transaction_mode="create_savepoint", expire_on_commit=False)
-    try:
-        yield sess
-    finally:
-        await sess.close()
-        await trans.rollback()
-        await conn.close()
-        await engine.dispose()
-
-
-@pytest_asyncio.fixture
-async def make_client(
-    session: AsyncSession,
-) -> AsyncIterator[Callable[..., AsyncClient]]:
-    transport = ASGITransport(app=app)
-    opened: list[AsyncClient] = []
-
-    async def _session_override() -> AsyncIterator[AsyncSession]:
-        yield session
-
-    def _make(principal: Principal | None = None) -> AsyncClient:
-        if principal is not None:
-            app.dependency_overrides[get_current_principal] = lambda: principal
-        app.dependency_overrides[get_session] = _session_override
-        client = AsyncClient(transport=transport, base_url="http://test")
-        opened.append(client)
-        return client
-
-    yield _make
-
-    for client in opened:
-        await client.aclose()
-    app.dependency_overrides.clear()
+# `session` и `make_client` — общие фикстуры из tests/integration/conftest.py.
 
 
 def _principal(kind: PrincipalKind, **kwargs: Any) -> Principal:

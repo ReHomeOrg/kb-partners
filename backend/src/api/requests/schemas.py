@@ -17,11 +17,12 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from api.requests.enums import Category, ChannelIn, RequestStatus
+from api.requests.enums import AuthorType, Category, ChannelIn, RequestStatus
 
 # Предел длины свободного ввода (анти-абьюз публичной формы, NFR-11).
 _MAX_RAW_INPUT = 20_000
 _MAX_ID = 255
+_MAX_MESSAGE = 20_000
 
 
 class RequestCreate(BaseModel):
@@ -87,3 +88,80 @@ class RequestRead(BaseModel):
     category: Category | None
     status: RequestStatus
     created_at: datetime.datetime
+
+
+class RequestDetail(RequestRead):
+    """Карточка заявки (§11.1): + `allowed_transitions` (источник истины — бэкенд, §7).
+
+    `raw_input` маскируется по scope (FR-1.6/FR-4.6): оператору/владельцу — исходник,
+    партнёру — `raw_input_masked`. Поле строит сервис (не прямой ORM-маппинг).
+    """
+
+    partner_id: str | None
+    product_code: str | None
+    booking_id: str | None
+    premises_id: str | None
+    updated_at: datetime.datetime
+    raw_input: str
+    allowed_transitions: list[RequestStatus]
+
+
+class AttachmentRef(BaseModel):
+    """Ссылка на вложение в kb-files (FR-1.5). Секреты/байты не инлайнятся."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    file_id: str = Field(min_length=1, max_length=_MAX_ID)
+    filename: str | None = Field(default=None, max_length=_MAX_ID)
+    content_type: str | None = Field(default=None, max_length=128)
+
+
+class MessageCreate(BaseModel):
+    """Тело `POST /requests/{id}/messages` (§11.1).
+
+    `is_internal=True` — внутренняя заметка; доступна только операторам (CLAUDE.md
+    правило 10), сервис отклоняет её от заявителя/партнёра (403).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(min_length=1, max_length=_MAX_MESSAGE)
+    is_internal: bool = False
+    attachments: list[AttachmentRef] = Field(default_factory=list)
+
+
+class MessageRead(BaseModel):
+    """Сообщение/заметка заявки. Внутренние заметки в выдаче — только операторам."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    author_type: AuthorType
+    author_id: str | None
+    is_internal: bool
+    text: str
+    attachments: list[dict[str, Any]]
+    created_at: datetime.datetime
+
+
+class TransitionRequest(BaseModel):
+    """Тело `POST /requests/{id}/transition` — переход FSM (валидируется по §7)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    target: RequestStatus
+
+
+class CancelRequest(BaseModel):
+    """Тело `POST /requests/{id}/cancel` — отмена с обязательной причиной (§11.1)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(min_length=1, max_length=_MAX_MESSAGE)
+
+
+class RequestListResponse(BaseModel):
+    """Страница списка заявок: элементы + курсор следующей страницы (или null)."""
+
+    items: list[RequestRead]
+    next_cursor: str | None

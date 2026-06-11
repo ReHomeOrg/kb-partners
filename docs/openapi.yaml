@@ -75,6 +75,66 @@ paths:
 
   # --- Заявки (E1 intake, веха M1.2). Префикс /api/v1/partners. ---
   /api/v1/partners/requests:
+    get:
+      tags: [Requests]
+      summary: Список заявок (scope-фильтр, курсорная пагинация)
+      operationId: listRequests
+      description: >-
+        Видимые субъекту заявки (контур access_level + владение). Курсорная
+        пагинация; фильтры status / category / partner_id / период (§11.1).
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/RequestStatus"
+        - name: category
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/Category"
+        - name: partner_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: created_from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: created_to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+      responses:
+        "200":
+          description: Страница заявок.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestListResponse"
+        "401":
+          description: Не аутентифицирован.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
     post:
       tags: [Requests]
       summary: Приём заявки (ЛК-форма / m2m)
@@ -180,6 +240,186 @@ paths:
                 $ref: "#/components/schemas/RequestRead"
         "403":
           description: Требуется сервис-принципал.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/partners/requests/{request_id}:
+    parameters:
+      - name: request_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Requests]
+      summary: Карточка заявки + allowed_transitions
+      operationId: getRequest
+      description: >-
+        Карточка с `allowed_transitions` (§7). `raw_input` маскируется по scope.
+        Недоступный ресурс → 404 (анти-enumeration).
+      responses:
+        "200":
+          description: Карточка заявки.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestDetail"
+        "404":
+          description: Заявка не найдена или недоступна.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/partners/requests/{request_id}/transition:
+    parameters:
+      - name: request_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Requests]
+      summary: Переход статуса (валидация по FSM)
+      operationId: transitionRequest
+      description: Переход FSM (§7). Запрещённый → 409; недоступная → 404; нет прав → 403.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TransitionRequest"
+      responses:
+        "200":
+          description: Новое состояние карточки.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestDetail"
+        "403":
+          description: Действие недоступно субъекту.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Заявка не найдена или недоступна.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Запрещённый переход (FSM).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/partners/requests/{request_id}/cancel:
+    parameters:
+      - name: request_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Requests]
+      summary: Отмена заявки (с причиной)
+      operationId: cancelRequest
+      description: Отмена из нетерминального статуса (§7). Партнёру запрещена (403).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CancelRequest"
+      responses:
+        "200":
+          description: Заявка отменена.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestDetail"
+        "403":
+          description: Действие недоступно субъекту.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Заявка не найдена или недоступна.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Заявка уже в терминальном статусе.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/partners/requests/{request_id}/messages:
+    parameters:
+      - name: request_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Requests]
+      summary: Сообщения заявки (внутренние — только операторам)
+      operationId: listRequestMessages
+      description: Хронология; `is_internal`-заметки скрыты от заявителя/партнёра (правило 10).
+      responses:
+        "200":
+          description: Список сообщений.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MessageRead"
+        "404":
+          description: Заявка не найдена или недоступна.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      tags: [Requests]
+      summary: Сообщение / внутренняя заметка
+      operationId: addRequestMessage
+      description: >-
+        Добавить сообщение. `is_internal=true` — только оператор (иначе 403).
+        Недоступная заявка → 404.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MessageCreate"
+      responses:
+        "201":
+          description: Сообщение добавлено.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageRead"
+        "403":
+          description: Внутренняя заметка доступна только оператору.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Заявка не найдена или недоступна.
           content:
             application/problem+json:
               schema:
@@ -358,3 +598,175 @@ components:
         created_at:
           type: string
           format: date-time
+
+    AuthorType:
+      type: string
+      enum: [REQUESTER, OPERATOR, PARTNER, SYSTEM, AI]
+
+    RequestDetail:
+      description: >-
+        Карточка заявки: поля RequestRead + allowed_transitions (§7) и scope-маскированный
+        raw_input (оператор/владелец — исходник, партнёр — маска).
+      type: object
+      additionalProperties: false
+      required:
+        [
+          id,
+          number,
+          requester_id,
+          channel_in,
+          category,
+          status,
+          created_at,
+          partner_id,
+          product_code,
+          booking_id,
+          premises_id,
+          updated_at,
+          raw_input,
+          allowed_transitions,
+        ]
+      properties:
+        id:
+          type: string
+          format: uuid
+        number:
+          type: string
+        requester_id:
+          type: string
+        channel_in:
+          $ref: "#/components/schemas/ChannelIn"
+        category:
+          oneOf:
+            - $ref: "#/components/schemas/Category"
+            - type: "null"
+        status:
+          $ref: "#/components/schemas/RequestStatus"
+        created_at:
+          type: string
+          format: date-time
+        partner_id:
+          oneOf:
+            - type: string
+            - type: "null"
+        product_code:
+          oneOf:
+            - type: string
+            - type: "null"
+        booking_id:
+          oneOf:
+            - type: string
+            - type: "null"
+        premises_id:
+          oneOf:
+            - type: string
+            - type: "null"
+        updated_at:
+          type: string
+          format: date-time
+        raw_input:
+          type: string
+        allowed_transitions:
+          type: array
+          items:
+            $ref: "#/components/schemas/RequestStatus"
+
+    AttachmentRef:
+      description: Ссылка на вложение в kb-files (FR-1.5).
+      type: object
+      additionalProperties: false
+      required: [file_id]
+      properties:
+        file_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+        filename:
+          oneOf:
+            - type: string
+            - type: "null"
+        content_type:
+          oneOf:
+            - type: string
+            - type: "null"
+
+    MessageCreate:
+      description: Сообщение/заметка. is_internal=true — только оператор (иначе 403).
+      type: object
+      additionalProperties: false
+      required: [text]
+      properties:
+        text:
+          type: string
+          minLength: 1
+          maxLength: 20000
+        is_internal:
+          type: boolean
+          default: false
+        attachments:
+          type: array
+          items:
+            $ref: "#/components/schemas/AttachmentRef"
+
+    MessageRead:
+      description: Сообщение заявки. Внутренние заметки в выдаче — только операторам.
+      type: object
+      additionalProperties: false
+      required: [id, author_type, author_id, is_internal, text, attachments, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        author_type:
+          $ref: "#/components/schemas/AuthorType"
+        author_id:
+          oneOf:
+            - type: string
+            - type: "null"
+        is_internal:
+          type: boolean
+        text:
+          type: string
+        attachments:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+
+    TransitionRequest:
+      description: Переход FSM; target валидируется по §7.
+      type: object
+      additionalProperties: false
+      required: [target]
+      properties:
+        target:
+          $ref: "#/components/schemas/RequestStatus"
+
+    CancelRequest:
+      description: Отмена заявки с обязательной причиной.
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 20000
+
+    RequestListResponse:
+      description: Страница списка заявок + курсор следующей страницы (или null).
+      type: object
+      additionalProperties: false
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/RequestRead"
+        next_cursor:
+          oneOf:
+            - type: string
+            - type: "null"

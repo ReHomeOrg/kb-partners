@@ -9,15 +9,33 @@ Read / transition / messages — M1.3.
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, Response, status
+from fastapi import APIRouter, Depends, Header, Query, Response, status
 
 from api.auth.dependencies import get_current_principal
 from api.auth.principal import Principal
-from api.requests.dependencies import get_intake_service, require_service_principal
-from api.requests.schemas import FromChatCreate, FromTicketCreate, RequestCreate, RequestRead
-from api.requests.service import IntakeService
+from api.requests.dependencies import (
+    get_intake_service,
+    get_list_filters,
+    get_request_service,
+    require_service_principal,
+)
+from api.requests.repository import RequestListFilters
+from api.requests.schemas import (
+    CancelRequest,
+    FromChatCreate,
+    FromTicketCreate,
+    MessageCreate,
+    MessageRead,
+    RequestCreate,
+    RequestDetail,
+    RequestListResponse,
+    RequestRead,
+    TransitionRequest,
+)
+from api.requests.service import IntakeService, RequestService
 
 router = APIRouter(prefix="/requests", tags=["Requests"])
 
@@ -86,3 +104,92 @@ async def create_request_from_ticket(
     if not created:
         response.status_code = status.HTTP_200_OK
     return RequestRead.model_validate(request)
+
+
+# --- Чтение и жизненный цикл (M1.3) ---------------------------------------
+
+
+@router.get("", response_model=RequestListResponse, summary="Список заявок (scope-фильтр)")
+async def list_requests(
+    principal: Principal = Depends(get_current_principal),
+    service: RequestService = Depends(get_request_service),
+    filters: RequestListFilters = Depends(get_list_filters),
+    cursor: str | None = Query(default=None),
+    limit: int | None = Query(default=None, ge=1, le=100),
+) -> RequestListResponse:
+    """Видимые субъекту заявки (контур + владение); курсорная пагинация, фильтры (§11.1)."""
+    return await service.list_requests(principal, filters, cursor=cursor, limit=limit)
+
+
+@router.get(
+    "/{request_id}",
+    response_model=RequestDetail,
+    summary="Карточка заявки + allowed_transitions",
+)
+async def get_request(
+    request_id: uuid.UUID,
+    principal: Principal = Depends(get_current_principal),
+    service: RequestService = Depends(get_request_service),
+) -> RequestDetail:
+    """Карточка с `allowed_transitions` (§7); masking `raw_input` по scope. Недоступная → 404."""
+    return await service.get_detail(principal, request_id)
+
+
+@router.post(
+    "/{request_id}/transition",
+    response_model=RequestDetail,
+    summary="Переход статуса (валидация по FSM)",
+)
+async def transition_request(
+    request_id: uuid.UUID,
+    body: TransitionRequest,
+    principal: Principal = Depends(get_current_principal),
+    service: RequestService = Depends(get_request_service),
+) -> RequestDetail:
+    """Переход FSM (§7): запрещённый → 409; невидимая → 404; нет прав → 403."""
+    return await service.transition(principal, request_id, body)
+
+
+@router.post(
+    "/{request_id}/cancel",
+    response_model=RequestDetail,
+    summary="Отмена заявки (с причиной)",
+)
+async def cancel_request(
+    request_id: uuid.UUID,
+    body: CancelRequest,
+    principal: Principal = Depends(get_current_principal),
+    service: RequestService = Depends(get_request_service),
+) -> RequestDetail:
+    """Отмена из нетерминального статуса (§7); партнёру запрещена (403)."""
+    return await service.cancel(principal, request_id, body.reason)
+
+
+@router.get(
+    "/{request_id}/messages",
+    response_model=list[MessageRead],
+    summary="Сообщения заявки (внутренние — только операторам)",
+)
+async def list_messages(
+    request_id: uuid.UUID,
+    principal: Principal = Depends(get_current_principal),
+    service: RequestService = Depends(get_request_service),
+) -> list[MessageRead]:
+    """Хронология сообщений; `is_internal`-заметки скрыты от заявителя/партнёра (правило 10)."""
+    return await service.list_messages(principal, request_id)
+
+
+@router.post(
+    "/{request_id}/messages",
+    response_model=MessageRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Сообщение/внутренняя заметка",
+)
+async def add_message(
+    request_id: uuid.UUID,
+    body: MessageCreate,
+    principal: Principal = Depends(get_current_principal),
+    service: RequestService = Depends(get_request_service),
+) -> MessageRead:
+    """Добавить сообщение; `is_internal=True` — только оператор (иначе 403). Невидимая → 404."""
+    return await service.add_message(principal, request_id, body)

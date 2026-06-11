@@ -61,3 +61,31 @@ def test_intake_schemas_are_valid(spec: dict[str, Any]) -> None:
         Draft202012Validator.check_schema(schemas[name])
     # RequestRead не отдаёт ПДн-поле raw_input наружу (FR-1.6).
     assert "raw_input" not in schemas["RequestRead"]["properties"]
+
+
+def test_spec_declares_lifecycle_operations(spec: dict[str, Any]) -> None:
+    # M1.3: read / transition / cancel / messages под /{request_id}.
+    paths = spec["paths"]
+    base = "/api/v1/partners/requests"
+    assert "get" in paths[base]  # список
+    assert "get" in paths[f"{base}/{{request_id}}"]
+    for sub in ("transition", "cancel"):
+        assert "post" in paths[f"{base}/{{request_id}}/{sub}"]
+    messages = paths[f"{base}/{{request_id}}/messages"]
+    assert "get" in messages and "post" in messages
+
+
+def test_lifecycle_schemas_are_valid(spec: dict[str, Any]) -> None:
+    schemas = spec["components"]["schemas"]
+    for name in (
+        "RequestDetail",
+        "MessageCreate",
+        "MessageRead",
+        "TransitionRequest",
+        "CancelRequest",
+        "RequestListResponse",
+    ):
+        assert name in schemas, f"missing schema {name}"
+        Draft202012Validator.check_schema(schemas[name])
+    # Карточка обязана отдавать allowed_transitions (§7, бэкенд — источник истины).
+    assert "allowed_transitions" in schemas["RequestDetail"]["properties"]
