@@ -203,6 +203,17 @@ class Settings(BaseSettings):
         description="Имя модели YandexGPT (modelUri=gpt://<folder>/<model>/latest).",
     )
 
+    # --- Боевые каналы доставки партнёру (E4, §9.2, ADR-0004). Свои HTTP-адаптеры,
+    # без вендорских SDK. Токены ботов — в config канала (ссылка на kb-vault), не здесь;
+    # здесь только базовые URL API мессенджеров. ---
+    telegram_api_base_url: str = Field(
+        default="https://api.telegram.org", description="Базовый URL Telegram Bot API."
+    )
+    max_api_base_url: str = Field(
+        default="https://botapi.max.ru",
+        description="Базовый URL MAX Bot API [ДОПУЩЕНИЕ §16.10 — сверить].",
+    )
+
     # --- SLA (E6, §16 п.3). Бизнес-часы недельного графика + IANA-TZ (DST-корректно,
     # FR-6.1). Дедлайны/breach считаются на чтении и переходах БЕЗ воркера (FR-6.2).
     # Параметры — дефолты, подтверждение Архитектора по вехе (§16). ---

@@ -14,6 +14,7 @@ from typing import Protocol
 
 import httpx
 
+from api.channels.adapters.bot import MaxChannel, TelegramChannel
 from api.channels.adapters.mock import MockChannel
 from api.channels.adapters.partner_api import PartnerApiChannel
 from api.channels.enums import ChannelType
@@ -57,11 +58,27 @@ class HttpChannelResolver:
             return self._mock()
         if config.channel_type is ChannelType.API:
             return self._partner_api(config)
+        if config.channel_type is ChannelType.TELEGRAM:
+            return self._bot(self._settings.telegram_api_base_url, ChannelType.TELEGRAM)
+        if config.channel_type is ChannelType.MAX:
+            return self._bot(self._settings.max_api_base_url, ChannelType.MAX)
         raise NotImplementedError(f"channel {config.channel_type.value} requires an ADR")
 
     @contextlib.asynccontextmanager
     async def _mock(self) -> AsyncIterator[DeliveryChannel]:
         yield MockChannel()
+
+    @contextlib.asynccontextmanager
+    async def _bot(
+        self, base_url: str, channel_type: ChannelType
+    ) -> AsyncIterator[DeliveryChannel]:
+        """Telegram/MAX поверх httpx (base — API мессенджера; токен — в config канала)."""
+        async with httpx.AsyncClient(
+            base_url=base_url, timeout=self._settings.client_timeout_seconds
+        ) as http:
+            resilient = build_resilient_client(channel_type.value.lower(), http, self._settings)
+            channel = TelegramChannel if channel_type is ChannelType.TELEGRAM else MaxChannel
+            yield channel(resilient)
 
     @contextlib.asynccontextmanager
     async def _partner_api(self, config: PartnerChannelConfig) -> AsyncIterator[DeliveryChannel]:
