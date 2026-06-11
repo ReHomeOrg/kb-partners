@@ -60,7 +60,8 @@ async def test_enqueue_and_claim_batch(session: AsyncSession) -> None:
     repo = OutboxRepository(session)
     # available_at задаём явно (server_default=func.now() — реальные часы БД, тест бы
     # зависел от стенного времени относительно фиксированного _NOW).
-    for payload in ({"a": 1}, {"a": 2}):
+    payloads: tuple[dict[str, object], ...] = ({"a": 1}, {"a": 2})
+    for payload in payloads:
         repo.enqueue("dispatch", payload).available_at = _NOW
     await session.commit()
     claimed = await repo.claim_batch(kind="dispatch", now=_NOW, limit=10)

@@ -12,7 +12,7 @@ import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.config import get_settings
-from api.notifications.events import notifications_for
+from api.notifications.events import NotifyAudience, notifications_for
 from api.outbox.repository import OutboxRepository
 from api.requests.enums import RequestStatus
 
@@ -45,3 +45,31 @@ def emit_notifications(
                 "summary": notification.summary,
             },
         )
+
+
+def emit_operator_escalation(
+    session: AsyncSession,
+    *,
+    request_id: uuid.UUID,
+    number: str,
+    status: RequestStatus,
+    summary: str,
+) -> None:
+    """Эскалация оператору без смены статуса (FR-4.5/9.4).
+
+    Для случаев, когда заявка остаётся в текущем статусе (напр. fallback-цепочка
+    исчерпана при отклонении → заявка ждёт оператора в MATCHING, без ребра FSM в
+    FAILED_DISPATCH). Инертно, пока уведомления выключены. Без ПДн.
+    """
+    if not get_settings().notifications_enabled:
+        return
+    OutboxRepository(session).enqueue(
+        NOTIFICATION_KIND,
+        {
+            "audience": NotifyAudience.OPERATOR.value,
+            "request_id": str(request_id),
+            "number": number,
+            "status": status.value,
+            "summary": summary,
+        },
+    )

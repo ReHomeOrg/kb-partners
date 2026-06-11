@@ -281,6 +281,14 @@ class Settings(BaseSettings):
             "авто-пайплайн ведёт заявку без человека. Неизвестное → conservative classify."
         ),
     )
+    automation_time_based_enabled: bool = Field(
+        default=False,
+        description=(
+            "Включает time_based-движок (E6, FR-6.3): воркер-сканер откатывает заявки с "
+            "breach дедлайна принятия на следующего партнёра fallback-цепочки (авто-fallback). "
+            "Дефолт False → скан инертен; read-side breach (на чтении) от него не зависит."
+        ),
+    )
 
 
 @lru_cache(maxsize=1)

@@ -11,7 +11,7 @@ import datetime
 import uuid
 from dataclasses import dataclass
 
-from sqlalchemy import Sequence, and_, or_, select
+from sqlalchemy import DateTime, Sequence, and_, cast, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.principal import Principal
@@ -117,6 +117,33 @@ class RequestRepository:
             )
         stmt = stmt.order_by(ServiceRequest.created_at.desc(), ServiceRequest.id.desc())
         stmt = stmt.limit(limit + 1)
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def list_accept_overdue(
+        self, now: datetime.datetime, *, limit: int
+    ) -> list[ServiceRequest]:
+        """DISPATCHED-заявки с просроченным сырым `accept_deadline` (грубый пред-фильтр).
+
+        Берёт строки FOR UPDATE SKIP LOCKED (конкурентные сканеры не пересекаются).
+        Сырой дедлайн `< now` — НЕОБХОДИМОЕ условие breach (паузы только отодвигают
+        эффективный дедлайн позже); точный breach подтверждает `SlaPolicy.evaluate`
+        у вызывающего (time_based-движок, E6).
+        """
+        accept_deadline = cast(
+            ServiceRequest.sla["accept_deadline"].astext, DateTime(timezone=True)
+        )
+        stmt = (
+            select(ServiceRequest)
+            .where(
+                ServiceRequest.status == RequestStatus.DISPATCHED,
+                accept_deadline.isnot(None),
+                accept_deadline < now,
+            )
+            .order_by(accept_deadline.asc())
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
