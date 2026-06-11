@@ -88,3 +88,4 @@ class HistoryAction(str, enum.Enum):
     CREATED = "CREATED"
     STATUS_CHANGED = "STATUS_CHANGED"
     MESSAGE_ADDED = "MESSAGE_ADDED"
+    CLASSIFIED = "CLASSIFIED"

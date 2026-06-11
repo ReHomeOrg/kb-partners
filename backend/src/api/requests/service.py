@@ -22,6 +22,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.principal import Principal, PrincipalKind
+from api.classifier.engine import ClassifierEngine
 from api.errors import ProblemException
 from api.observability.logging import get_logger
 from api.observability.pii_mask import mask_pii
@@ -34,6 +35,7 @@ from api.requests.access import (
 from api.requests.enums import (
     AccessLevel,
     AuthorType,
+    Category,
     ChannelIn,
     HistoryAction,
     RequestStatus,
@@ -77,6 +79,57 @@ _AUTHOR_BY_KIND: dict[PrincipalKind, AuthorType] = {
 # Потолок размера страницы списка (§11 курсорная пагинация; анти-абьюз NFR-11).
 _MAX_PAGE_LIMIT = 100
 _DEFAULT_PAGE_LIMIT = 50
+
+
+def apply_transition(
+    session: AsyncSession, principal: Principal, request: ServiceRequest, target: RequestStatus
+) -> None:
+    """Сменить статус с валидацией FSM (§7, запрещённый → 409) и записью аудита.
+
+    Общий хелпер для жизненного цикла (transition/cancel) и классификации (E2).
+    Commit — у вызывающего сервиса.
+    """
+    previous = request.status
+    ensure_transition(previous, target)
+    request.status = target
+    timestamp_field = _STATUS_TIMESTAMP.get(target)
+    if timestamp_field is not None:
+        setattr(request, timestamp_field, datetime.datetime.now(datetime.UTC))
+    session.add(
+        RequestHistory(
+            request_id=request.id,
+            actor_id=principal.on_behalf_of or principal.user_id,
+            action=HistoryAction.STATUS_CHANGED,
+            from_value=previous.value,
+            to_value=target.value,
+        )
+    )
+
+
+def build_detail(principal: Principal, request: ServiceRequest) -> RequestDetail:
+    """Собрать карточку заявки с masking `raw_input` по scope (§11.1, FR-4.6).
+
+    Строится из загруженного объекта — вызывать ДО commit для сущностей, прочитанных
+    с FOR UPDATE (после commit они экспайрятся, ленивое дочитывание упадёт в async).
+    """
+    raw = request.raw_input if can_see_raw_input(principal, request) else request.raw_input_masked
+    return RequestDetail(
+        id=request.id,
+        number=request.number,
+        requester_id=request.requester_id,
+        channel_in=request.channel_in,
+        category=request.category,
+        status=request.status,
+        created_at=request.created_at,
+        partner_id=request.partner_id,
+        product_code=request.product_code,
+        booking_id=request.booking_id,
+        premises_id=request.premises_id,
+        updated_at=request.updated_at,
+        raw_input=raw,
+        classification=request.classification,
+        allowed_transitions=sorted(allowed_transitions(request.status), key=lambda s: s.value),
+    )
 
 
 class IntakeService:
@@ -235,7 +288,7 @@ class RequestService:
         request = await self._repo.get_visible(principal, request_id)
         if request is None:
             raise ProblemException.not_found()
-        return self._to_detail(principal, request)
+        return build_detail(principal, request)
 
     async def list_requests(
         self,
@@ -266,11 +319,11 @@ class RequestService:
             raise ProblemException.not_found()
         if not can_drive_lifecycle(principal):
             raise ProblemException.forbidden(detail="Lifecycle transition not allowed for subject")
-        self._apply_transition(principal, request, body.target)
+        apply_transition(self._session, principal, request, body.target)
         # Карточку строим ДО commit: объект, загруженный с FOR UPDATE, после commit
         # экспайрится (блокировка снята → данные потенциально устарели), и ленивое
         # дочитывание в async-контексте упало бы.
-        detail = self._to_detail(principal, request)
+        detail = build_detail(principal, request)
         await self._session.commit()
         return detail
 
@@ -282,9 +335,9 @@ class RequestService:
             raise ProblemException.not_found()
         if not can_cancel(principal):
             raise ProblemException.forbidden(detail="Cancellation not allowed for subject")
-        self._apply_transition(principal, request, RequestStatus.CANCELLED)
+        apply_transition(self._session, principal, request, RequestStatus.CANCELLED)
         request.custom_fields = {**request.custom_fields, "cancellation": {"reason": reason}}
-        detail = self._to_detail(principal, request)  # до commit (FOR UPDATE экспайрит)
+        detail = build_detail(principal, request)  # до commit (FOR UPDATE экспайрит)
         await self._session.commit()
         return detail
 
@@ -326,44 +379,81 @@ class RequestService:
         )
         return [MessageRead.model_validate(m) for m in messages]
 
-    def _apply_transition(
-        self, principal: Principal, request: ServiceRequest, target: RequestStatus
+
+# Статусы, из которых допустима (ре)классификация (E2). NEW — первичная;
+# CLASSIFIED/NEEDS_REVIEW — реклассификация по запросу оператора/агента (FR-2.5).
+_CLASSIFIABLE_STATUSES = frozenset(
+    {RequestStatus.NEW, RequestStatus.CLASSIFIED, RequestStatus.NEEDS_REVIEW}
+)
+
+
+class ClassificationService:
+    """Классификация категории заявки (E2): rules+LLM, порог → NEEDS_REVIEW, аудит.
+
+    На вход движку идёт только `raw_input_masked` (FR-1.6). Решение и его
+    трассировка пишутся в `classification` и `RequestHistory` (FR-2.6).
+    """
+
+    def __init__(
+        self, session: AsyncSession, engine: ClassifierEngine, confidence_threshold: float
     ) -> None:
-        """Сменить статус с валидацией FSM (§7, запрещённый → 409) и записью аудита."""
-        previous = request.status
-        ensure_transition(previous, target)
-        request.status = target
-        timestamp_field = _STATUS_TIMESTAMP.get(target)
-        if timestamp_field is not None:
-            setattr(request, timestamp_field, datetime.datetime.now(datetime.UTC))
+        self._session = session
+        self._repo = RequestRepository(session)
+        self._engine = engine
+        self._threshold = confidence_threshold
+
+    async def classify(self, principal: Principal, request_id: uuid.UUID) -> RequestDetail:
+        request = await self._repo.get_visible(principal, request_id, for_update=True)
+        if request is None:
+            raise ProblemException.not_found()
+        # Классификация/реклассификация — оператор или агент (FR-2.5).
+        if not can_drive_lifecycle(principal):
+            raise ProblemException.forbidden(detail="Classification not allowed for subject")
+        if request.status not in _CLASSIFIABLE_STATUSES:
+            raise ProblemException.conflict(
+                detail=f"Classification not allowed in status {request.status.value}"
+            )
+
+        outcome = await self._engine.classify(request.raw_input_masked)
+        classified_at = datetime.datetime.now(datetime.UTC)
+        request.category = outcome.category
+        request.product_code = outcome.product_code
+        request.classification = outcome.to_classification(classified_at)
+        confident = outcome.confidence >= self._threshold and outcome.category is not Category.OTHER
+
+        self._route_status(principal, request, confident=confident)
         self._session.add(
             RequestHistory(
                 request_id=request.id,
                 actor_id=principal.on_behalf_of or principal.user_id,
-                action=HistoryAction.STATUS_CHANGED,
-                from_value=previous.value,
-                to_value=target.value,
+                action=HistoryAction.CLASSIFIED,
+                from_value=outcome.method,
+                to_value=outcome.category.value,
             )
         )
+        detail = build_detail(principal, request)  # до commit (FOR UPDATE экспайрит)
+        await self._session.commit()
+        _logger.info(
+            "request classified: number=%s category=%s method=%s confident=%s",
+            request.number,
+            outcome.category.value,
+            outcome.method,
+            confident,
+        )
+        return detail
 
-    @staticmethod
-    def _to_detail(principal: Principal, request: ServiceRequest) -> RequestDetail:
-        raw = (
-            request.raw_input if can_see_raw_input(principal, request) else request.raw_input_masked
-        )
-        return RequestDetail(
-            id=request.id,
-            number=request.number,
-            requester_id=request.requester_id,
-            channel_in=request.channel_in,
-            category=request.category,
-            status=request.status,
-            created_at=request.created_at,
-            partner_id=request.partner_id,
-            product_code=request.product_code,
-            booking_id=request.booking_id,
-            premises_id=request.premises_id,
-            updated_at=request.updated_at,
-            raw_input=raw,
-            allowed_transitions=sorted(allowed_transitions(request.status), key=lambda s: s.value),
-        )
+    def _route_status(
+        self, principal: Principal, request: ServiceRequest, *, confident: bool
+    ) -> None:
+        """Провести FSM по итогу классификации (§7).
+
+        Первичная (NEW): NEW→CLASSIFYING→CLASSIFIED, при низкой уверенности далее
+        CLASSIFIED→NEEDS_REVIEW. Реклассификация: из CLASSIFIED при падении уверенности
+        → NEEDS_REVIEW; из NEEDS_REVIEW статус не меняется (нет легального ребра к
+        CLASSIFIED по §7) — обновляются только метаданные, дальше оператор назначает.
+        """
+        if request.status is RequestStatus.NEW:
+            apply_transition(self._session, principal, request, RequestStatus.CLASSIFYING)
+            apply_transition(self._session, principal, request, RequestStatus.CLASSIFIED)
+        if not confident and request.status is RequestStatus.CLASSIFIED:
+            apply_transition(self._session, principal, request, RequestStatus.NEEDS_REVIEW)

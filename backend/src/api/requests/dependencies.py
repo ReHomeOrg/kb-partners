@@ -14,11 +14,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.dependencies import get_current_principal
 from api.auth.principal import Principal, PrincipalKind
+from api.classifier.engine import ClassifierEngine
+from api.classifier.provider import build_llm_provider
+from api.config import get_settings
 from api.db import get_session
 from api.errors import ProblemException
 from api.requests.enums import Category, RequestStatus
 from api.requests.repository import RequestListFilters
-from api.requests.service import IntakeService, RequestService
+from api.requests.service import ClassificationService, IntakeService, RequestService
 
 
 async def require_service_principal(
@@ -38,6 +41,15 @@ def get_intake_service(session: AsyncSession = Depends(get_session)) -> IntakeSe
 def get_request_service(session: AsyncSession = Depends(get_session)) -> RequestService:
     """Сервис чтения/жизненного цикла заявок на сессию запроса."""
     return RequestService(session)
+
+
+def get_classification_service(
+    session: AsyncSession = Depends(get_session),
+) -> ClassificationService:
+    """Сервис классификации (E2): движок rules+LLM из конфигурации (env-switch)."""
+    settings = get_settings()
+    engine = ClassifierEngine(build_llm_provider(settings.classifier_llm_provider))
+    return ClassificationService(session, engine, settings.classifier_confidence_threshold)
 
 
 def get_list_filters(

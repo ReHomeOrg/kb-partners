@@ -364,6 +364,47 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /api/v1/partners/requests/{request_id}/classify:
+    parameters:
+      - name: request_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Requests]
+      summary: (Ре)классификация категории (operator/agent)
+      operationId: classifyRequest
+      description: >-
+        E2: rules + LLM по `raw_input_masked` (FR-2.1–2.3); ниже порога уверенности
+        или неоднозначно → NEEDS_REVIEW (FR-2.4). Трассировка в `classification`.
+      responses:
+        "200":
+          description: Карточка с обновлённой категорией/классификацией.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestDetail"
+        "403":
+          description: Доступно только оператору/агенту.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Заявка не найдена или недоступна.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Классификация недопустима в текущем статусе.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /api/v1/partners/requests/{request_id}/messages:
     parameters:
       - name: request_id
@@ -624,6 +665,7 @@ components:
           premises_id,
           updated_at,
           raw_input,
+          classification,
           allowed_transitions,
         ]
       properties:
@@ -666,6 +708,11 @@ components:
           format: date-time
         raw_input:
           type: string
+        classification:
+          oneOf:
+            - type: object
+              additionalProperties: true
+            - type: "null"
         allowed_transitions:
           type: array
           items:

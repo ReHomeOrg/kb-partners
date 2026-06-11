@@ -89,3 +89,10 @@ def test_lifecycle_schemas_are_valid(spec: dict[str, Any]) -> None:
         Draft202012Validator.check_schema(schemas[name])
     # Карточка обязана отдавать allowed_transitions (§7, бэкенд — источник истины).
     assert "allowed_transitions" in schemas["RequestDetail"]["properties"]
+
+
+def test_spec_declares_classify_operation(spec: dict[str, Any]) -> None:
+    # E2 (M2.1): (ре)классификация + трассировка в карточке.
+    classify = spec["paths"]["/api/v1/partners/requests/{request_id}/classify"]
+    assert "post" in classify
+    assert "classification" in spec["components"]["schemas"]["RequestDetail"]["properties"]

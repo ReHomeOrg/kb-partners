@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, Header, Query, Response, status
 from api.auth.dependencies import get_current_principal
 from api.auth.principal import Principal
 from api.requests.dependencies import (
+    get_classification_service,
     get_intake_service,
     get_list_filters,
     get_request_service,
@@ -35,7 +36,7 @@ from api.requests.schemas import (
     RequestRead,
     TransitionRequest,
 )
-from api.requests.service import IntakeService, RequestService
+from api.requests.service import ClassificationService, IntakeService, RequestService
 
 router = APIRouter(prefix="/requests", tags=["Requests"])
 
@@ -148,6 +149,23 @@ async def transition_request(
 ) -> RequestDetail:
     """Переход FSM (§7): запрещённый → 409; невидимая → 404; нет прав → 403."""
     return await service.transition(principal, request_id, body)
+
+
+@router.post(
+    "/{request_id}/classify",
+    response_model=RequestDetail,
+    summary="(Ре)классификация категории (operator/agent)",
+)
+async def classify_request(
+    request_id: uuid.UUID,
+    principal: Principal = Depends(get_current_principal),
+    service: ClassificationService = Depends(get_classification_service),
+) -> RequestDetail:
+    """E2: rules+LLM по `raw_input_masked`; ниже порога/неоднозначно → NEEDS_REVIEW (FR-2.4).
+
+    Невидимая заявка → 404; нет прав (не operator/agent) → 403; недопустимый статус → 409.
+    """
+    return await service.classify(principal, request_id)
 
 
 @router.post(

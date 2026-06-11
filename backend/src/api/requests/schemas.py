@@ -103,6 +103,7 @@ class RequestDetail(RequestRead):
     premises_id: str | None
     updated_at: datetime.datetime
     raw_input: str
+    classification: dict[str, Any] | None
     allowed_transitions: list[RequestStatus]
 
 

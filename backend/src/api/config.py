@@ -159,6 +159,26 @@ class Settings(BaseSettings):
         default="", description="m2m-токен kb-support. ПУСТО → интеграция претензий инертна."
     )
 
+    # --- Классификатор категории (E2, §4.11). Детерминированные правила (быстрый
+    # путь) + LLMProvider (env-switch, как в kb-search). Реальные LLM-SDK — только
+    # через ADR (правило 6); пустой провайдер → NullLLMProvider (rules-only). ---
+    classifier_confidence_threshold: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Порог уверенности классификатора (FR-2.4). Ниже порога или при "
+            "неоднозначности заявка уходит в NEEDS_REVIEW (human-handoff)."
+        ),
+    )
+    classifier_llm_provider: str = Field(
+        default="",
+        description=(
+            "Выбор LLM-провайдера (yandexgpt/gigachat/vllm/mock). ПУСТО → NullLLMProvider "
+            "(только rules-путь). Реальные провайдеры подключаются отдельным ADR."
+        ),
+    )
+
     # --- Dramatiq-воркер (SLA-таймеры, time_based, IMAP-poll, outbox-drainer).
     # ПУСТОЙ broker_url → StubBroker, акторы инертны (broker/worker поднимает ops). ---
     worker_broker_url: str = Field(
