@@ -19,7 +19,7 @@ from api.automation.timers import drain_partner_fallback_batch, scan_accept_time
 from api.channels.dispatch import drain_dispatch_batch
 from api.channels.resolver import HttpChannelResolver
 from api.classifier.engine import ClassifierEngine
-from api.classifier.provider import build_llm_provider
+from api.classifier.yandexgpt import build_llm_provider
 from api.clients.auth import StaticTokenProvider
 from api.clients.cache import InMemoryCache
 from api.clients.factory import build_resilient_client
@@ -69,7 +69,7 @@ async def _drain_on_create() -> int:
 
 def _automation_deps(settings: Settings, platform: HttpPlatformClient) -> AutomationDeps:
     return AutomationDeps(
-        engine=ClassifierEngine(build_llm_provider(settings.classifier_llm_provider)),
+        engine=ClassifierEngine(build_llm_provider(settings)),
         confidence_threshold=settings.classifier_confidence_threshold,
         platform=platform,
         matcher=Matcher(),

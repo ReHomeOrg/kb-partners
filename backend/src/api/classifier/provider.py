@@ -43,11 +43,5 @@ class NullLLMProvider:
         return None
 
 
-def build_llm_provider(provider_name: str) -> LLMProvider:
-    """Собрать провайдера по имени из конфигурации (env-switch).
-
-    На M2.1 любые значения резолвятся в `NullLLMProvider`: реальные SDK
-    (yandexgpt/gigachat/vllm) подключаются отдельными ADR. Имя сохраняется в
-    конфиге для forward-совместимости и явной диагностики.
-    """
-    return NullLLMProvider()
+# Сборка провайдера по конфигурации — в `api.classifier.yandexgpt.build_llm_provider`
+# (там живёт боевой YandexGptProvider; держать фабрику здесь создало бы цикл импорта).

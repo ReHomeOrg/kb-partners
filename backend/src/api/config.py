@@ -182,8 +182,25 @@ class Settings(BaseSettings):
         default="",
         description=(
             "Выбор LLM-провайдера (yandexgpt/gigachat/vllm/mock). ПУСТО → NullLLMProvider "
-            "(только rules-путь). Реальные провайдеры подключаются отдельным ADR."
+            "(только rules-путь). Боевой провайдер по умолчанию — YandexGPT (ADR-0003)."
         ),
+    )
+    # YandexGPT — боевой LLM классификатора (ADR-0003, §16.9). РФ, ФЗ-152. Свой HTTP-
+    # адаптер (Api-Key), без вендорского SDK. ПУСТОЙ api_key/folder → провайдер инертен
+    # (rules-only). На вход модели идёт ТОЛЬКО raw_input_masked (ПДн вырезаны, FR-1.6).
+    yandexgpt_api_base_url: str = Field(
+        default="https://llm.api.cloud.yandex.net",
+        description="Базовый URL YandexGPT Foundation Models API.",
+    )
+    yandexgpt_api_key: str = Field(
+        default="", description="Api-Key YandexGPT (ссылка на kb-vault). ПУСТО → провайдер инертен."
+    )
+    yandexgpt_folder_id: str = Field(
+        default="", description="Идентификатор каталога Yandex Cloud (x-folder-id)."
+    )
+    yandexgpt_model: str = Field(
+        default="yandexgpt-lite",
+        description="Имя модели YandexGPT (modelUri=gpt://<folder>/<model>/latest).",
     )
 
     # --- SLA (E6, §16 п.3). Бизнес-часы недельного графика + IANA-TZ (DST-корректно,

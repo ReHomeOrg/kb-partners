@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.auth.dependencies import get_current_principal
 from api.auth.principal import Principal, PrincipalKind
 from api.classifier.engine import ClassifierEngine
-from api.classifier.provider import build_llm_provider
+from api.classifier.yandexgpt import build_llm_provider
 from api.clients.auth import StaticTokenProvider
 from api.clients.cache import InMemoryCache
 from api.clients.factory import build_resilient_client
@@ -77,7 +77,7 @@ def get_classification_service(
 ) -> ClassificationService:
     """Сервис классификации (E2): движок rules+LLM из конфигурации (env-switch)."""
     settings = get_settings()
-    engine = ClassifierEngine(build_llm_provider(settings.classifier_llm_provider))
+    engine = ClassifierEngine(build_llm_provider(settings))
     return ClassificationService(session, engine, settings.classifier_confidence_threshold)
 
 

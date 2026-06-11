@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime
 
 from api.classifier.engine import RULES_VERSION, ClassificationOutcome, ClassifierEngine
-from api.classifier.provider import LLMClassification, NullLLMProvider, build_llm_provider
+from api.classifier.provider import LLMClassification, NullLLMProvider
 from api.requests.enums import Category
 
 _ENGINE = ClassifierEngine(NullLLMProvider())
@@ -65,11 +65,6 @@ async def test_llm_path_used_when_ambiguous() -> None:
 
 async def test_null_provider_returns_none() -> None:
     assert await NullLLMProvider().classify("что-то") is None
-
-
-def test_build_provider_is_null_until_adr() -> None:
-    # Реальные SDK подключаются отдельным ADR; пока любой выбор → NullLLMProvider.
-    assert isinstance(build_llm_provider("yandexgpt"), NullLLMProvider)
 
 
 def test_outcome_serialization_has_trace_fields() -> None:

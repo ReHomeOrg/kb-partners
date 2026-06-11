@@ -1,0 +1,20 @@
+{
+  "_doc": "Стартовый golden-набор классификатора (E2, §16.13). Владелец и расширение — Архитектор/kb-eval. Тексты — уже маскированные (raw_input_masked), без ПДн. Целевая точность rules-пути — accuracy >= 0.8 (см. test_classifier_golden.py).",
+  "cases": [
+    {"text": "Нужна генеральная уборка квартиры 60 м2", "category": "CLEANING"},
+    {"text": "Помыть окна после ремонта", "category": "CLEANING"},
+    {"text": "Требуется клининг офиса", "category": "CLEANING"},
+    {"text": "Закажите чистку ковра", "category": "CLEANING"},
+    {"text": "Организовать переезд из двушки", "category": "MOVING"},
+    {"text": "Нужны грузчики и газель для перевозки мебели", "category": "MOVING"},
+    {"text": "Вывезти старый диван", "category": "MOVING"},
+    {"text": "Перевезти вещи на новую квартиру", "category": "MOVING"},
+    {"text": "Сломался смеситель, нужен сантехник", "category": "REPAIR"},
+    {"text": "Протечка крана на кухне", "category": "REPAIR"},
+    {"text": "Не работает розетка, вызвать электрика", "category": "REPAIR"},
+    {"text": "Мелкий ремонт: починить дверь", "category": "REPAIR"},
+    {"text": "Передать ключи новому жильцу", "category": "KEY_DELIVERY"},
+    {"text": "Доставка ключей в офис", "category": "KEY_DELIVERY"},
+    {"text": "Нужно передать ключ соседу", "category": "KEY_DELIVERY"}
+  ]
+}
