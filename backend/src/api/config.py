@@ -179,6 +179,35 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- SLA (E6, §16 п.3). Бизнес-часы недельного графика + IANA-TZ (DST-корректно,
+    # FR-6.1). Дедлайны/breach считаются на чтении и переходах БЕЗ воркера (FR-6.2).
+    # Параметры — дефолты, подтверждение Архитектора по вехе (§16). ---
+    sla_timezone: str = Field(
+        default="Europe/Moscow", description="IANA-таймзона расчёта бизнес-часов SLA."
+    )
+    sla_business_open_hour: int = Field(
+        default=9, ge=0, le=23, description="Час начала рабочего окна (локальное время)."
+    )
+    sla_business_close_hour: int = Field(
+        default=18, ge=1, le=24, description="Час конца рабочего окна (локальное время)."
+    )
+    sla_business_days: list[int] = Field(
+        default_factory=lambda: [0, 1, 2, 3, 4],
+        description="Рабочие дни недели (0=Пн … 6=Вс).",
+    )
+    sla_accept_hours: float = Field(
+        default=4.0, gt=0, description="SLA принятия партнёром (бизнес-часы от диспетчеризации)."
+    )
+    sla_perform_hours: float = Field(
+        default=24.0, gt=0, description="SLA выполнения (бизнес-часы от принятия партнёром)."
+    )
+    sla_at_risk_fraction: float = Field(
+        default=0.8,
+        gt=0,
+        le=1,
+        description="Доля дедлайна, после которой состояние SLA → AT_RISK.",
+    )
+
     # --- Dramatiq-воркер (SLA-таймеры, time_based, IMAP-poll, outbox-drainer).
     # ПУСТОЙ broker_url → StubBroker, акторы инертны (broker/worker поднимает ops). ---
     worker_broker_url: str = Field(

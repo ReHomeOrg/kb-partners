@@ -31,6 +31,7 @@ from api.observability.logging import get_logger
 from api.requests.enums import AuthorType, RequestStatus
 from api.requests.models import RequestMessage, ServiceRequest
 from api.requests.service import apply_transition
+from api.sla.engine import SlaPolicy
 
 _logger = get_logger("inbound")
 
@@ -71,9 +72,16 @@ def is_fresh(timestamp: str, now: float, window: int = _TIMESTAMP_WINDOW) -> boo
 class InboundService:
     """Обработка входящих от партнёра по подписанному каналу (E5)."""
 
-    def __init__(self, session: AsyncSession, *, now: Callable[[], float] = time.time) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        policy: SlaPolicy,
+        now: Callable[[], float] = time.time,
+    ) -> None:
         self._session = session
         self._repo = InboundRepository(session)
+        self._policy = policy
         self._now = now
 
     async def handle_api(
@@ -144,3 +152,9 @@ class InboundService:
         if target is request.status:
             return  # уже в целевом статусе — идемпотентно
         apply_transition(self._session, _CHANNEL_PRINCIPAL, request, target)
+        if target is RequestStatus.ACCEPTED:
+            # SLA выполнения стартует с принятия партнёром (FR-6.1).
+            assert request.accepted_at is not None  # проставлен apply_transition(ACCEPTED)
+            sla = self._policy.set_perform_deadline(request.sla, request.accepted_at)
+            sla["perform_started_at"] = request.accepted_at.isoformat()
+            request.sla = sla

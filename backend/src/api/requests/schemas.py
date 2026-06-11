@@ -106,6 +106,7 @@ class RequestDetail(RequestRead):
     updated_at: datetime.datetime
     raw_input: str
     classification: dict[str, Any] | None
+    sla: dict[str, Any] | None
     # match_trace / fallback_chain — операторская объяснимость подбора; раскрываются
     # только сотрудникам (раскрытие конкурентов-партнёров заявителю/партнёру недопустимо).
     match_trace: dict[str, Any] | None

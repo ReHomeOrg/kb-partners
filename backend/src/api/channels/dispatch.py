@@ -34,6 +34,7 @@ from api.requests.models import ServiceRequest
 from api.requests.repository import RequestRepository
 from api.requests.schemas import RequestDetail
 from api.requests.service import apply_transition, build_detail
+from api.sla.engine import SlaPolicy
 
 _logger = get_logger("dispatch")
 
@@ -45,11 +46,12 @@ _SUCCESS_OUTCOMES = frozenset(
 class DispatchService:
     """Запуск диспетчеризации (operator/agent). Источник — ASSIGNED (§7)."""
 
-    def __init__(self, session: AsyncSession, resolver: ChannelResolver) -> None:
+    def __init__(self, session: AsyncSession, resolver: ChannelResolver, policy: SlaPolicy) -> None:
         self._session = session
         self._requests = RequestRepository(session)
         self._dispatch = DispatchRepository(session)
         self._resolver = resolver
+        self._policy = policy
 
     async def dispatch(self, principal: Principal, request_id: uuid.UUID) -> RequestDetail:
         request = await self._requests.get_visible(principal, request_id, for_update=True)
@@ -66,7 +68,13 @@ class DispatchService:
 
         apply_transition(self._session, principal, request, RequestStatus.DISPATCHED)
         delivered = await self._deliver(request)
-        if not delivered:
+        if delivered:
+            # SLA принятия стартует с момента доставки партнёру (FR-6.1).
+            assert request.dispatched_at is not None  # проставлен apply_transition(DISPATCHED)
+            sla = self._policy.set_accept_deadline(request.sla, request.dispatched_at)
+            sla["accept_started_at"] = request.dispatched_at.isoformat()
+            request.sla = sla
+        else:
             apply_transition(self._session, principal, request, RequestStatus.FAILED_DISPATCH)
 
         detail = build_detail(principal, request)  # до commit (FOR UPDATE экспайрит)

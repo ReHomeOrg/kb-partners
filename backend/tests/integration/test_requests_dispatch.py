@@ -29,9 +29,11 @@ from api.channels.protocol import (
     StatusUpdate,
 )
 from api.channels.resolver import ChannelResolver
+from api.config import Settings
 from api.main import app
 from api.requests.enums import AccessLevel, Category, ChannelIn, RequestStatus
 from api.requests.models import ServiceRequest
+from api.sla.engine import SlaPolicy
 
 _BASE = "/api/v1/partners/requests"
 
@@ -78,7 +80,7 @@ class _MapResolver:
 def _use_resolver(session: AsyncSession, outcomes: dict[str, DeliveryOutcome]) -> None:
     def _dep() -> DispatchService:
         resolver: ChannelResolver = _MapResolver(outcomes)
-        return DispatchService(session, resolver)
+        return DispatchService(session, resolver, SlaPolicy.from_settings(Settings()))
 
     app.dependency_overrides[get_dispatch_service] = _dep
 
@@ -143,6 +145,9 @@ async def test_dispatch_success_records_attempt(
     body = resp.json()
     assert body["status"] == RequestStatus.DISPATCHED.value
     assert body["delivery_channel"] == "MOCK"
+    # SLA принятия выставлен и оценён на чтении (E6, FR-6.1/6.2).
+    assert body["sla"]["accept_deadline"]
+    assert body["sla"]["accept_state"] in {"ON_TRACK", "AT_RISK", "BREACHED"}
     assert await _attempt_count(session, req.id) == 1
     attempt = await session.scalar(
         select(DispatchAttempt).where(DispatchAttempt.request_id == req.id)

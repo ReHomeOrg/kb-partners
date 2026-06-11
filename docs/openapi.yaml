@@ -933,6 +933,7 @@ components:
           updated_at,
           raw_input,
           classification,
+          sla,
           match_trace,
           fallback_chain,
           allowed_transitions,
@@ -986,6 +987,12 @@ components:
         raw_input:
           type: string
         classification:
+          oneOf:
+            - type: object
+              additionalProperties: true
+            - type: "null"
+        sla:
+          description: SLA-дедлайны + вычисленные на чтении состояния (E6).
           oneOf:
             - type: object
               additionalProperties: true

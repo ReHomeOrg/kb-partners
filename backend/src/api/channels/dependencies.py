@@ -14,6 +14,7 @@ from api.channels.service import ChannelConfigService
 from api.config import get_settings
 from api.db import get_session
 from api.errors import ProblemException
+from api.sla.engine import SlaPolicy
 
 
 async def require_staff_admin(
@@ -30,10 +31,13 @@ def get_channel_service(session: AsyncSession = Depends(get_session)) -> Channel
 
 
 def get_dispatch_service(session: AsyncSession = Depends(get_session)) -> DispatchService:
-    """Сервис диспетчеризации (E4): резолвер каналов из конфигурации."""
-    return DispatchService(session, HttpChannelResolver(get_settings()))
+    """Сервис диспетчеризации (E4): резолвер каналов + SLA-политика из конфигурации."""
+    settings = get_settings()
+    return DispatchService(
+        session, HttpChannelResolver(settings), SlaPolicy.from_settings(settings)
+    )
 
 
 def get_inbound_service(session: AsyncSession = Depends(get_session)) -> InboundService:
-    """Сервис приёма входящих от партнёров (E5)."""
-    return InboundService(session)
+    """Сервис приёма входящих от партнёров (E5) + SLA-политика."""
+    return InboundService(session, policy=SlaPolicy.from_settings(get_settings()))

@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.auth.principal import Principal, PrincipalKind
 from api.classifier.engine import ClassifierEngine
 from api.clients.platform.protocol import PlatformClient
+from api.config import get_settings
 from api.errors import ProblemException
 from api.matching.engine import Matcher
 from api.observability.logging import get_logger
@@ -58,6 +59,7 @@ from api.requests.schemas import (
     RequestRead,
     TransitionRequest,
 )
+from api.sla.engine import SlaPolicy, sla_view
 
 _logger = get_logger("requests.intake")
 
@@ -118,6 +120,13 @@ def build_detail(principal: Principal, request: ServiceRequest) -> RequestDetail
     raw = request.raw_input if can_see_raw_input(principal, request) else request.raw_input_masked
     # Объяснимость подбора раскрывает id конкурентов-партнёров — только сотрудникам.
     staff_view = can_view_internal(principal)
+    sla = sla_view(
+        request.sla,
+        accepted_at=request.accepted_at,
+        done_at=request.done_at,
+        policy=SlaPolicy.from_settings(get_settings()),
+        now=datetime.datetime.now(datetime.UTC),
+    )
     return RequestDetail(
         id=request.id,
         number=request.number,
@@ -135,6 +144,7 @@ def build_detail(principal: Principal, request: ServiceRequest) -> RequestDetail
         updated_at=request.updated_at,
         raw_input=raw,
         classification=request.classification,
+        sla=sla,
         match_trace=request.match_trace if staff_view else None,
         fallback_chain=request.fallback_chain if staff_view else None,
         allowed_transitions=sorted(allowed_transitions(request.status), key=lambda s: s.value),
