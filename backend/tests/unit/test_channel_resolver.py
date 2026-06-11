@@ -36,9 +36,10 @@ async def test_resolve_partner_api_channel() -> None:
 
 
 def test_resolve_unsupported_requires_adr() -> None:
+    # CRM-канал ещё не реализован (M11.3) → NotImplementedError (диспетчер фиксирует FAILED).
     resolver = HttpChannelResolver(Settings())
     with pytest.raises(NotImplementedError):
-        resolver.resolve(_cfg(ChannelType.EMAIL))
+        resolver.resolve(_cfg(ChannelType.CRM))
 
 
 def test_to_channel_config_projection() -> None:
