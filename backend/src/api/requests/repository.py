@@ -147,6 +147,28 @@ class RequestRepository:
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
+    async def list_raw_input_expired(
+        self, cutoff: datetime.datetime, *, limit: int
+    ) -> list[ServiceRequest]:
+        """Заявки с просроченным сырым `raw_input` для обезличивания (NFR-12, 152-ФЗ).
+
+        `created_at < cutoff` И `raw_input != raw_input_masked` (последнее — маркер
+        «ещё не обезличена»: после обезличивания raw_input := masked, и строка
+        перестаёт попадать в выборку → идемпотентность). FOR UPDATE SKIP LOCKED.
+        """
+        stmt = (
+            select(ServiceRequest)
+            .where(
+                ServiceRequest.created_at < cutoff,
+                ServiceRequest.raw_input != ServiceRequest.raw_input_masked,
+            )
+            .order_by(ServiceRequest.created_at.asc())
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
     def add_message(self, message: RequestMessage) -> None:
         """Поставить сообщение/заметку в сессию (commit — у сервиса)."""
         self._session.add(message)

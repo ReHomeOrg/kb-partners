@@ -29,6 +29,7 @@ from api.db import async_session_factory
 from api.matching.engine import Matcher
 from api.notifications.drainer import drain_notification_batch
 from api.observability.logging import get_logger
+from api.retention.worker import anonymize_expired_raw_input
 from api.sla.engine import SlaPolicy
 from api.tasks.broker import broker  # noqa: F401 — импорт устанавливает брокер
 from api.webhooks.client import WebhookClient
@@ -161,3 +162,16 @@ def drain_outbox_partner_fallback() -> None:
     """Авто-fallback после отклонения партнёром (FR-5.3): передиспетчеризация."""
     processed = asyncio.run(_drain_partner_fallback())
     _logger.info("outbox partner_fallback drain: processed=%d", processed)
+
+
+async def _run_retention() -> int:
+    settings = get_settings()
+    async with async_session_factory() as session:
+        return await anonymize_expired_raw_input(session, settings=settings)
+
+
+@dramatiq.actor(max_retries=0)
+def run_retention() -> None:
+    """Ретенция ПДн (NFR-12): обезличить просроченный raw_input."""
+    processed = asyncio.run(_run_retention())
+    _logger.info("retention anonymize: processed=%d", processed)

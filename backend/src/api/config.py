@@ -61,6 +61,13 @@ class Settings(BaseSettings):
             "По истечении — обезличивание/удаление; в LLM и логи идут только *_masked."
         ),
     )
+    retention_worker_enabled: bool = Field(
+        default=False,
+        description=(
+            "Включает воркер ретенции ПДн (NFR-12): обезличивание raw_input старше "
+            "raw_input_retention_days (raw_input := raw_input_masked). Дефолт False → инертен."
+        ),
+    )
 
     # --- Keycloak Bearer JWT (#29-аналог). Пустой auth_jwks_url → auth не
     # сконфигурирован (fail-closed 401). Issuer/audience задаются в окружении деплоя.

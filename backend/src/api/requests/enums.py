@@ -90,3 +90,4 @@ class HistoryAction(str, enum.Enum):
     MESSAGE_ADDED = "MESSAGE_ADDED"
     CLASSIFIED = "CLASSIFIED"
     ASSIGNED = "ASSIGNED"
+    ANONYMIZED = "ANONYMIZED"  # обезличивание ПДн по ретенции (NFR-12, 152-ФЗ)
