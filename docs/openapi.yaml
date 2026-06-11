@@ -635,6 +635,41 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /api/v1/partners/requests/{request_id}/requester-context:
+    parameters:
+      - name: request_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Requests]
+      summary: Контекст заявителя из rehome.one (operator/agent)
+      operationId: getRequesterContext
+      description: >-
+        E9/FR-9.1. User/Premises/Booking заявителя (контекст для оператора/агента).
+        Только привилегированные роли (403); недоступная заявка → 404.
+      responses:
+        "200":
+          description: Контекст заявителя (поля опциональны / контур недоступен → null).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequesterContextResponse"
+        "403":
+          description: Доступно только оператору/агенту.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Заявка не найдена или недоступна.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /api/v1/partners/requests/{request_id}/messages:
     parameters:
       - name: request_id
@@ -1289,6 +1324,22 @@ components:
         escrow_ref:
           type: string
           maxLength: 255
+
+    RequesterContextResponse:
+      description: Контекст заявителя из rehome.one (E9). Все поля опциональны.
+      type: object
+      additionalProperties: false
+      properties:
+        user_display_name:
+          oneOf: [{ type: string }, { type: "null" }]
+        user_phone:
+          oneOf: [{ type: string }, { type: "null" }]
+        user_email:
+          oneOf: [{ type: string }, { type: "null" }]
+        premises_address:
+          oneOf: [{ type: string }, { type: "null" }]
+        booking_status:
+          oneOf: [{ type: string }, { type: "null" }]
 
     RequestListResponse:
       description: Страница списка заявок + курсор следующей страницы (или null).

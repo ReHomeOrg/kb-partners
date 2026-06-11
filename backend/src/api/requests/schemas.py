@@ -202,6 +202,16 @@ class AssignRequest(BaseModel):
     service_area: str | None = Field(default=None, max_length=_MAX_ID)
 
 
+class RequesterContextResponse(BaseModel):
+    """Контекст заявителя из rehome.one (§11.1, operator/agent). Все поля опциональны."""
+
+    user_display_name: str | None = None
+    user_phone: str | None = None
+    user_email: str | None = None
+    premises_address: str | None = None
+    booking_status: str | None = None
+
+
 class RequestListResponse(BaseModel):
     """Страница списка заявок: элементы + курсор следующей страницы (или null)."""
 

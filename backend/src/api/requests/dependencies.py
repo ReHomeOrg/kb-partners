@@ -30,6 +30,7 @@ from api.db import get_session
 from api.errors import ProblemException
 from api.matching.engine import Matcher
 from api.requests.acceptance import AcceptanceService
+from api.requests.context import ContextService
 from api.requests.enums import Category, RequestStatus
 from api.requests.repository import RequestListFilters
 from api.requests.service import (
@@ -126,6 +127,21 @@ async def get_acceptance_service(
             enable_claims=bool(settings.kb_support_api_token),
             enable_settlement=bool(settings.rehome_one_api_token),
         )
+
+
+async def get_context_service(
+    session: AsyncSession = Depends(get_session),
+) -> AsyncIterator[ContextService]:
+    """Сервис контекста заявителя (E9): клиент rehome.one."""
+    settings = get_settings()
+    async with httpx.AsyncClient(
+        base_url=settings.rehome_one_api_base_url, timeout=settings.client_timeout_seconds
+    ) as http:
+        rehome = HttpRehomeOneClient(
+            http_client=build_resilient_client("rehome_one", http, settings),
+            token_provider=StaticTokenProvider(settings.rehome_one_api_token),
+        )
+        yield ContextService(session, rehome)
 
 
 def get_list_filters(

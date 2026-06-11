@@ -132,6 +132,12 @@ def test_spec_declares_settlement_operation(spec: dict[str, Any]) -> None:
     assert "SettlementConfirm" in spec["components"]["schemas"]
 
 
+def test_spec_declares_requester_context(spec: dict[str, Any]) -> None:
+    # E9 (M6.2): контекст заявителя (tool оператора/агента).
+    assert "get" in spec["paths"]["/api/v1/partners/requests/{request_id}/requester-context"]
+    assert "RequesterContextResponse" in spec["components"]["schemas"]
+
+
 def test_spec_declares_inbound_operation(spec: dict[str, Any]) -> None:
     # E5 (M3.3): подписанный webhook партнёра (публичный — security: []).
     inbound = spec["paths"]["/api/v1/partners/inbound/api/{token}"]["post"]

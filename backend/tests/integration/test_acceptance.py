@@ -47,6 +47,11 @@ class _FakeRehome:
     ) -> SettlementRef | None:
         return self._ref
 
+    async def get_requester_context(
+        self, *, requester_id: str, premises_id: str | None, booking_id: str | None
+    ) -> None:
+        return None
+
 
 def _use_acceptance(
     session: AsyncSession,

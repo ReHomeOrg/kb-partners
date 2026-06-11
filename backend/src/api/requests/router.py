@@ -19,10 +19,12 @@ from api.auth.principal import Principal
 from api.channels.dependencies import get_dispatch_service
 from api.channels.dispatch import DispatchService
 from api.requests.acceptance import AcceptanceService
+from api.requests.context import ContextService
 from api.requests.dependencies import (
     get_acceptance_service,
     get_assignment_service,
     get_classification_service,
+    get_context_service,
     get_intake_service,
     get_list_filters,
     get_request_service,
@@ -39,6 +41,7 @@ from api.requests.schemas import (
     MessageRead,
     RequestCreate,
     RequestDetail,
+    RequesterContextResponse,
     RequestListResponse,
     RequestRead,
     SettlementConfirm,
@@ -271,6 +274,20 @@ async def cancel_request(
 ) -> RequestDetail:
     """Отмена из нетерминального статуса (§7); партнёру запрещена (403)."""
     return await service.cancel(principal, request_id, body.reason)
+
+
+@router.get(
+    "/{request_id}/requester-context",
+    response_model=RequesterContextResponse,
+    summary="Контекст заявителя из rehome.one (operator/agent)",
+)
+async def get_requester_context(
+    request_id: uuid.UUID,
+    principal: Principal = Depends(get_current_principal),
+    service: ContextService = Depends(get_context_service),
+) -> RequesterContextResponse:
+    """E9/§11.1: User/Premises/Booking заявителя. Только оператор/агент (403); чужая → 404."""
+    return await service.get_requester_context(principal, request_id)
 
 
 @router.get(

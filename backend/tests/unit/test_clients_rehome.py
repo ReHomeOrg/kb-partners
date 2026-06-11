@@ -60,3 +60,22 @@ async def test_trigger_settlement_degrades_on_5xx(noop_sleep: SleepFn) -> None:
         request_id="r1", service_order_id=None, idempotency_key="k"
     )
     assert ref is None
+
+
+async def test_get_requester_context_maps(noop_sleep: SleepFn) -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        assert req.url.params["requester_id"] == "u1"
+        return httpx.Response(200, json={"user_display_name": "Иван", "user_phone": "***"})
+
+    ctx = await _client(handler, noop_sleep).get_requester_context(
+        requester_id="u1", premises_id=None, booking_id=None
+    )
+    assert ctx is not None
+    assert ctx.user_display_name == "Иван"
+
+
+async def test_get_requester_context_degrades(noop_sleep: SleepFn) -> None:
+    ctx = await _client(lambda req: httpx.Response(503), noop_sleep).get_requester_context(
+        requester_id="u1", premises_id="p1", booking_id="b1"
+    )
+    assert ctx is None
