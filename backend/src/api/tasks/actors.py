@@ -15,7 +15,7 @@ import httpx
 
 from api.automation.autonomy import parse_autonomy
 from api.automation.pipeline import AutomationDeps, drain_on_create_batch
-from api.automation.timers import scan_accept_timeouts
+from api.automation.timers import drain_partner_fallback_batch, scan_accept_timeouts
 from api.channels.dispatch import drain_dispatch_batch
 from api.channels.resolver import HttpChannelResolver
 from api.classifier.engine import ClassifierEngine
@@ -143,3 +143,21 @@ def scan_sla_timers() -> None:
     """Time_based-движок (E6): откатить просроченные DISPATCHED-заявки на fallback."""
     processed = asyncio.run(_scan_sla_timers())
     _logger.info("sla timers scan: processed=%d", processed)
+
+
+async def _drain_partner_fallback() -> int:
+    settings = get_settings()
+    async with async_session_factory() as session:
+        return await drain_partner_fallback_batch(
+            session,
+            resolver=HttpChannelResolver(settings),
+            policy=SlaPolicy.from_settings(settings),
+            settings=settings,
+        )
+
+
+@dramatiq.actor(max_retries=0)
+def drain_outbox_partner_fallback() -> None:
+    """Авто-fallback после отклонения партнёром (FR-5.3): передиспетчеризация."""
+    processed = asyncio.run(_drain_partner_fallback())
+    _logger.info("outbox partner_fallback drain: processed=%d", processed)

@@ -12,7 +12,9 @@ import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.principal import Principal
+from api.config import get_settings
 from api.errors import ProblemException
+from api.outbox.repository import OutboxRepository
 from api.requests.enums import AuthorType, RequestStatus
 from api.requests.models import RequestMessage, ServiceRequest
 from api.requests.repository import RequestRepository
@@ -52,6 +54,13 @@ def advance_partner_status(
         sla = policy.set_perform_deadline(request.sla, request.accepted_at)
         sla["perform_started_at"] = request.accepted_at.isoformat()
         request.sla = sla
+    elif target is RequestStatus.MATCHING and get_settings().automation_time_based_enabled:
+        # FR-5.3: отклонение партнёром → авто-fallback на следующего из цепочки.
+        # Ставим durable-задачу (как accept-timeout); воркер передиспетчеризует.
+        # Локальный импорт — разрывает цикл partner↔timers (timers тянет dispatch/service).
+        from api.automation.timers import PARTNER_FALLBACK_KIND
+
+        OutboxRepository(session).enqueue(PARTNER_FALLBACK_KIND, {"request_id": str(request.id)})
 
 
 class PartnerService:

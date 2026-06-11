@@ -12,7 +12,9 @@
 from __future__ import annotations
 
 import datetime
+import uuid
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.principal import Principal, PrincipalKind
@@ -22,6 +24,8 @@ from api.channels.resolver import ChannelResolver
 from api.config import Settings
 from api.notifications.emitter import emit_operator_escalation
 from api.observability.logging import get_logger
+from api.outbox.models import OutboxMessage
+from api.outbox.repository import OutboxRepository
 from api.requests.enums import RequestStatus
 from api.requests.models import ServiceRequest
 from api.requests.repository import RequestRepository
@@ -32,6 +36,10 @@ _logger = get_logger("automation.timers")
 
 # Системный субъект таймеров SLA (breach/эскалации) для атрибуции в истории.
 SLA_TIMER_PRINCIPAL = Principal(user_id=SLA_ACTOR_ID, kind=PrincipalKind.SERVICE)
+
+# Outbox-вид: авто-fallback после ОТКЛОНЕНИЯ партнёром (FR-5.3). Ставится при переходе
+# заявки в MATCHING по статусу партнёра «rejected»; дрейнится тем же redispatch_to_next.
+PARTNER_FALLBACK_KIND = "partner_fallback"
 
 
 def _next_partner(request: ServiceRequest) -> str | None:
@@ -131,3 +139,57 @@ async def scan_accept_timeouts(
     await session.commit()
     _logger.info("sla accept-timeout scan: candidates=%d processed=%d", len(candidates), processed)
     return processed
+
+
+async def _load_for_update(session: AsyncSession, request_id: uuid.UUID) -> ServiceRequest | None:
+    stmt = select(ServiceRequest).where(ServiceRequest.id == request_id).with_for_update()
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def _process_partner_fallback(
+    session: AsyncSession,
+    message: OutboxMessage,
+    *,
+    resolver: ChannelResolver,
+    policy: SlaPolicy,
+) -> None:
+    """Откатить отклонённую партнёром заявку на следующего (один outbox-message).
+
+    Заявка уже в MATCHING (перевёл `advance_partner_status`). Если статус уже иной
+    (оператор/агент успел переназначить) — no-op (идемпотентно).
+    """
+    raw_id = message.payload.get("request_id")
+    request = await _load_for_update(session, uuid.UUID(str(raw_id))) if raw_id else None
+    if request is None or request.status is not RequestStatus.MATCHING:
+        return
+    with session.no_autoflush:
+        await redispatch_to_next(session, request, resolver=resolver, policy=policy)
+
+
+async def drain_partner_fallback_batch(
+    session: AsyncSession, *, resolver: ChannelResolver, policy: SlaPolicy, settings: Settings
+) -> int:
+    """Воркерный дрейн `partner_fallback` (FR-5.3). Возвращает число обработанных."""
+    repo = OutboxRepository(session)
+    now = datetime.datetime.now(datetime.UTC)
+    batch = await repo.claim_batch(
+        kind=PARTNER_FALLBACK_KIND,
+        now=now,
+        limit=settings.outbox_batch_size,
+        visibility_timeout=settings.outbox_visibility_timeout_seconds,
+    )
+    for message in batch:
+        try:
+            await _process_partner_fallback(session, message, resolver=resolver, policy=policy)
+            repo.mark_done(message, now)
+        except Exception as exc:  # noqa: BLE001 — инфраошибка → backoff-повтор
+            delay = settings.outbox_retry_base_seconds * (2 ** (message.attempts - 1))
+            repo.mark_failed_or_retry(
+                message,
+                error=f"{type(exc).__name__}: {exc}",
+                now=now,
+                max_attempts=settings.outbox_max_attempts,
+                retry_at=now + datetime.timedelta(seconds=delay),
+            )
+    await session.commit()
+    return len(batch)
