@@ -19,7 +19,7 @@ from api.auth.dependencies import get_current_principal
 from api.auth.principal import Principal, PrincipalKind
 from api.classifier.engine import ClassifierEngine
 from api.classifier.yandexgpt import build_llm_provider
-from api.clients.auth import StaticTokenProvider
+from api.clients.auth import build_token_provider
 from api.clients.cache import InMemoryCache
 from api.clients.factory import build_resilient_client
 from api.clients.platform.adapter import HttpPlatformClient
@@ -94,7 +94,9 @@ async def get_assignment_service(
     ) as http:
         platform = HttpPlatformClient(
             http_client=build_resilient_client("platform", http, settings),
-            token_provider=StaticTokenProvider(settings.platform_api_token),
+            token_provider=build_token_provider(
+                settings, fallback_token=settings.platform_api_token
+            ),
             cache=_PLATFORM_CACHE,
             cache_ttl_seconds=settings.platform_cache_ttl_seconds,
         )
@@ -121,11 +123,15 @@ async def get_acceptance_service(
     ):
         support = HttpKbSupportClient(
             http_client=build_resilient_client("kb_support", support_http, settings),
-            token_provider=StaticTokenProvider(settings.kb_support_api_token),
+            token_provider=build_token_provider(
+                settings, fallback_token=settings.kb_support_api_token
+            ),
         )
         rehome = HttpRehomeOneClient(
             http_client=build_resilient_client("rehome_one", rehome_http, settings),
-            token_provider=StaticTokenProvider(settings.rehome_one_api_token),
+            token_provider=build_token_provider(
+                settings, fallback_token=settings.rehome_one_api_token
+            ),
         )
         yield AcceptanceService(
             session,
@@ -146,7 +152,9 @@ async def get_context_service(
     ) as http:
         rehome = HttpRehomeOneClient(
             http_client=build_resilient_client("rehome_one", http, settings),
-            token_provider=StaticTokenProvider(settings.rehome_one_api_token),
+            token_provider=build_token_provider(
+                settings, fallback_token=settings.rehome_one_api_token
+            ),
         )
         yield ContextService(session, rehome)
 

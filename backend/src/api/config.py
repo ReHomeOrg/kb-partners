@@ -86,6 +86,19 @@ class Settings(BaseSettings):
         default=300, ge=1, description="TTL кеша JWKS (сек) до принудительного рефреша."
     )
 
+    # --- OAuth2 для ИСХОДЯЩИХ m2m-вызовов (ADR-0005, FR-9.7). client_credentials —
+    # сервис-принципал kb-partners; token-exchange (RFC 8693) — делегированный токен
+    # пользователя для on-behalf-of downstream. ПУСТЫЕ креды → dev StaticTokenProvider.
+    # client_secret — ссылкой на kb-vault. ---
+    oauth_token_url: str = Field(
+        default="", description="Keycloak token-endpoint для исходящих токенов. ПУСТО → dev-режим."
+    )
+    oauth_client_id: str = Field(default="", description="client_id сервис-принципала kb-partners.")
+    oauth_client_secret: str = Field(
+        default="",
+        description="client_secret (ссылка на kb-vault). ПУСТО → dev StaticTokenProvider.",
+    )
+
     # --- HTTP-клиенты к соседям (resilience и кеш). Конкретные base-URL —
     # ниже; параметры устойчивости общие (timeout → breaker → retry → метрики). ---
     redis_url: str = Field(

@@ -20,7 +20,7 @@ from api.channels.dispatch import drain_dispatch_batch
 from api.channels.resolver import HttpChannelResolver
 from api.classifier.engine import ClassifierEngine
 from api.classifier.yandexgpt import build_llm_provider
-from api.clients.auth import StaticTokenProvider
+from api.clients.auth import build_token_provider
 from api.clients.cache import InMemoryCache
 from api.clients.factory import build_resilient_client
 from api.clients.platform.adapter import HttpPlatformClient
@@ -61,7 +61,9 @@ async def _drain_on_create() -> int:
     ):
         platform = HttpPlatformClient(
             http_client=build_resilient_client("platform", http, settings),
-            token_provider=StaticTokenProvider(settings.platform_api_token),
+            token_provider=build_token_provider(
+                settings, fallback_token=settings.platform_api_token
+            ),
             cache=InMemoryCache(now=time.monotonic),
             cache_ttl_seconds=settings.platform_cache_ttl_seconds,
         )
@@ -130,13 +132,17 @@ async def _drain_notifications() -> int:
     ):
         platform = HttpPlatformClient(
             http_client=build_resilient_client("platform", platform_http, settings),
-            token_provider=StaticTokenProvider(settings.platform_api_token),
+            token_provider=build_token_provider(
+                settings, fallback_token=settings.platform_api_token
+            ),
             cache=InMemoryCache(now=time.monotonic),
             cache_ttl_seconds=settings.platform_cache_ttl_seconds,
         )
         rehome = HttpRehomeOneClient(
             http_client=build_resilient_client("rehome", rehome_http, settings),
-            token_provider=StaticTokenProvider(settings.rehome_one_api_token),
+            token_provider=build_token_provider(
+                settings, fallback_token=settings.rehome_one_api_token
+            ),
         )
         resolver = NeighborContactResolver(rehome=rehome, platform=platform, settings=settings)
         return await drain_notification_batch(session, settings=settings, resolver=resolver)

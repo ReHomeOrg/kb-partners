@@ -1,16 +1,17 @@
-"""Источник m2m-токена для исходящих вызовов к соседям (NFR-9).
+"""Источник m2m-токена для исходящих вызовов к соседям (NFR-9, ADR-0005).
 
-`TokenProvider` абстрагирует получение Bearer-токена, чтобы реальный механизм
-(Keycloak Client Credentials) подставился позже без правки адаптеров.
-
-`StaticTokenProvider` — **только dev/test**: токен из конфига-плейсхолдера. Реальный
-`ClientCredentialsTokenProvider` — после провижининга m2m-realm (отдельный Issue).
-В prod-сборке фабрика обязана fail-closed выбирать реальный провайдер.
+`TokenProvider` абстрагирует получение Bearer-токена. Боевой механизм — Keycloak
+client_credentials (`ClientCredentialsTokenProvider`, `api/clients/oauth.py`); фабрика
+`build_token_provider` выбирает его при заполненных OAuth-настройках, иначе fallback —
+`StaticTokenProvider` (dev/test-плейсхолдер из env).
 """
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from api.config import Settings
 
 
 @runtime_checkable
@@ -26,3 +27,22 @@ class StaticTokenProvider:
 
     async def get_token(self) -> str:
         return self._token
+
+
+def build_token_provider(settings: Settings, *, fallback_token: str = "") -> TokenProvider:
+    """Выбрать боевой провайдер (Keycloak client_credentials) или dev-fallback.
+
+    Заполнены `oauth_token_url`+`oauth_client_id`+`oauth_client_secret` → боевой
+    `ClientCredentialsTokenProvider`; иначе — `StaticTokenProvider(fallback_token)`
+    (dev/test-плейсхолдер соседа). Реальный механизм подключается env, без правки адаптеров.
+    """
+    if settings.oauth_token_url and settings.oauth_client_id and settings.oauth_client_secret:
+        from api.clients.oauth import ClientCredentialsTokenProvider
+
+        return ClientCredentialsTokenProvider(
+            token_url=settings.oauth_token_url,
+            client_id=settings.oauth_client_id,
+            client_secret=settings.oauth_client_secret,
+            timeout=settings.client_timeout_seconds,
+        )
+    return StaticTokenProvider(fallback_token)
