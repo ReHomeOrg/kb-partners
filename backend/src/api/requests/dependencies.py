@@ -8,7 +8,10 @@ acceptance E1). `get_intake_service` — точка инъекции `IntakeServ
 from __future__ import annotations
 
 import datetime
+import time
+from collections.abc import AsyncIterator
 
+import httpx
 from fastapi import Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,12 +19,27 @@ from api.auth.dependencies import get_current_principal
 from api.auth.principal import Principal, PrincipalKind
 from api.classifier.engine import ClassifierEngine
 from api.classifier.provider import build_llm_provider
+from api.clients.auth import StaticTokenProvider
+from api.clients.cache import InMemoryCache
+from api.clients.factory import build_resilient_client
+from api.clients.platform.adapter import HttpPlatformClient
 from api.config import get_settings
 from api.db import get_session
 from api.errors import ProblemException
+from api.matching.engine import Matcher
 from api.requests.enums import Category, RequestStatus
 from api.requests.repository import RequestListFilters
-from api.requests.service import ClassificationService, IntakeService, RequestService
+from api.requests.service import (
+    AssignmentService,
+    ClassificationService,
+    IntakeService,
+    RequestService,
+)
+
+# Кеш реестра партнёров — процесс-синглтон (справочные read-only данные переживают
+# запросы). HTTP-клиент/breaker — per-request (жизненный цикл httpx у вызывающего,
+# как в эталоне kb-support); персистентный app-level breaker — будущая оптимизация.
+_PLATFORM_CACHE = InMemoryCache(now=time.monotonic)
 
 
 async def require_service_principal(
@@ -50,6 +68,26 @@ def get_classification_service(
     settings = get_settings()
     engine = ClassifierEngine(build_llm_provider(settings.classifier_llm_provider))
     return ClassificationService(session, engine, settings.classifier_confidence_threshold)
+
+
+async def get_assignment_service(
+    session: AsyncSession = Depends(get_session),
+) -> AsyncIterator[AssignmentService]:
+    """Сервис подбора/назначения (E3): platform-клиент реестра + matcher.
+
+    Открывает httpx-клиент к kb-platform на время запроса (закрывается по выходу).
+    """
+    settings = get_settings()
+    async with httpx.AsyncClient(
+        base_url=settings.platform_api_base_url, timeout=settings.client_timeout_seconds
+    ) as http:
+        platform = HttpPlatformClient(
+            http_client=build_resilient_client("platform", http, settings),
+            token_provider=StaticTokenProvider(settings.platform_api_token),
+            cache=_PLATFORM_CACHE,
+            cache_ttl_seconds=settings.platform_cache_ttl_seconds,
+        )
+        yield AssignmentService(session, platform, Matcher())
 
 
 def get_list_filters(

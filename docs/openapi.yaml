@@ -405,6 +405,59 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /api/v1/partners/requests/{request_id}/assign:
+    parameters:
+      - name: request_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Requests]
+      summary: Подбор / назначение партнёра (operator/agent)
+      operationId: assignRequest
+      description: >-
+        E3 (FR-3.1–3.4). partner_id → ручное назначение; пусто → авто-подбор по
+        реестру kb-platform (ранжирование + fallback_chain + match_trace).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssignRequest"
+      responses:
+        "200":
+          description: Назначено; карточка с partner_id/каналом/трассировкой.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestDetail"
+        "403":
+          description: Действие недоступно субъекту.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Заявка не найдена или недоступна.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Назначение недопустимо в текущем статусе / заявка не классифицирована.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Нет пригодных партнёров для авто-подбора.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /api/v1/partners/requests/{request_id}/messages:
     parameters:
       - name: request_id
@@ -663,9 +716,12 @@ components:
           product_code,
           booking_id,
           premises_id,
+          delivery_channel,
           updated_at,
           raw_input,
           classification,
+          match_trace,
+          fallback_chain,
           allowed_transitions,
         ]
       properties:
@@ -703,6 +759,10 @@ components:
           oneOf:
             - type: string
             - type: "null"
+        delivery_channel:
+          oneOf:
+            - type: string
+            - type: "null"
         updated_at:
           type: string
           format: date-time
@@ -713,10 +773,37 @@ components:
             - type: object
               additionalProperties: true
             - type: "null"
+        match_trace:
+          description: Объяснимость подбора (только сотрудникам; иначе null).
+          oneOf:
+            - type: object
+              additionalProperties: true
+            - type: "null"
+        fallback_chain:
+          description: Упорядоченные collaborator_id для авто-fallback (только сотрудникам).
+          oneOf:
+            - type: array
+              items:
+                type: string
+            - type: "null"
         allowed_transitions:
           type: array
           items:
             $ref: "#/components/schemas/RequestStatus"
+
+    AssignRequest:
+      description: >-
+        partner_id задан → ручное назначение (FR-3.4); пусто → авто-подбор по
+        реестру (service_area — опциональный гео-фильтр).
+      type: object
+      additionalProperties: false
+      properties:
+        partner_id:
+          type: string
+          maxLength: 255
+        service_area:
+          type: string
+          maxLength: 255
 
     AttachmentRef:
       description: Ссылка на вложение в kb-files (FR-1.5).

@@ -79,7 +79,7 @@ class ServiceRequest(Base, TimestampMixin):
     # --- Подбор и диспетчеризация (E3/E4) ---
     partner_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     match_trace: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
-    fallback_chain: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
+    fallback_chain: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
     delivery_channel: Mapped[str | None] = mapped_column(String(_ENUM_LEN), nullable=True)
     service_order_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 

@@ -96,3 +96,14 @@ def test_spec_declares_classify_operation(spec: dict[str, Any]) -> None:
     classify = spec["paths"]["/api/v1/partners/requests/{request_id}/classify"]
     assert "post" in classify
     assert "classification" in spec["components"]["schemas"]["RequestDetail"]["properties"]
+
+
+def test_spec_declares_assign_operation(spec: dict[str, Any]) -> None:
+    # E3 (M2.3): подбор/назначение + объяснимость в карточке.
+    assign = spec["paths"]["/api/v1/partners/requests/{request_id}/assign"]
+    assert "post" in assign
+    schemas = spec["components"]["schemas"]
+    assert "AssignRequest" in schemas
+    Draft202012Validator.check_schema(schemas["AssignRequest"])
+    detail_props = schemas["RequestDetail"]["properties"]
+    assert {"match_trace", "fallback_chain", "delivery_channel"} <= set(detail_props)

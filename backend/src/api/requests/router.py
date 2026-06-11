@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, Header, Query, Response, status
 from api.auth.dependencies import get_current_principal
 from api.auth.principal import Principal
 from api.requests.dependencies import (
+    get_assignment_service,
     get_classification_service,
     get_intake_service,
     get_list_filters,
@@ -25,6 +26,7 @@ from api.requests.dependencies import (
 )
 from api.requests.repository import RequestListFilters
 from api.requests.schemas import (
+    AssignRequest,
     CancelRequest,
     FromChatCreate,
     FromTicketCreate,
@@ -36,7 +38,12 @@ from api.requests.schemas import (
     RequestRead,
     TransitionRequest,
 )
-from api.requests.service import ClassificationService, IntakeService, RequestService
+from api.requests.service import (
+    AssignmentService,
+    ClassificationService,
+    IntakeService,
+    RequestService,
+)
 
 router = APIRouter(prefix="/requests", tags=["Requests"])
 
@@ -166,6 +173,24 @@ async def classify_request(
     Невидимая заявка → 404; нет прав (не operator/agent) → 403; недопустимый статус → 409.
     """
     return await service.classify(principal, request_id)
+
+
+@router.post(
+    "/{request_id}/assign",
+    response_model=RequestDetail,
+    summary="Подбор/назначение партнёра (operator/agent)",
+)
+async def assign_request(
+    request_id: uuid.UUID,
+    body: AssignRequest,
+    principal: Principal = Depends(get_current_principal),
+    service: AssignmentService = Depends(get_assignment_service),
+) -> RequestDetail:
+    """E3: `partner_id` → ручное назначение (FR-3.4); пусто → авто-подбор по реестру.
+
+    Невидимая → 404; нет прав → 403; недопустимый статус → 409; нет кандидатов → 422.
+    """
+    return await service.assign(principal, request_id, body)
 
 
 @router.post(

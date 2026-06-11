@@ -23,7 +23,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.principal import Principal, PrincipalKind
 from api.classifier.engine import ClassifierEngine
+from api.clients.platform.protocol import PlatformClient
 from api.errors import ProblemException
+from api.matching.engine import Matcher
 from api.observability.logging import get_logger
 from api.observability.pii_mask import mask_pii
 from api.requests.access import (
@@ -45,6 +47,7 @@ from api.requests.models import RequestHistory, RequestMessage, ServiceRequest
 from api.requests.pagination import decode_cursor, encode_cursor
 from api.requests.repository import RequestListFilters, RequestRepository
 from api.requests.schemas import (
+    AssignRequest,
     FromChatCreate,
     FromTicketCreate,
     MessageCreate,
@@ -113,6 +116,8 @@ def build_detail(principal: Principal, request: ServiceRequest) -> RequestDetail
     с FOR UPDATE (после commit они экспайрятся, ленивое дочитывание упадёт в async).
     """
     raw = request.raw_input if can_see_raw_input(principal, request) else request.raw_input_masked
+    # Объяснимость подбора раскрывает id конкурентов-партнёров — только сотрудникам.
+    staff_view = can_view_internal(principal)
     return RequestDetail(
         id=request.id,
         number=request.number,
@@ -125,9 +130,12 @@ def build_detail(principal: Principal, request: ServiceRequest) -> RequestDetail
         product_code=request.product_code,
         booking_id=request.booking_id,
         premises_id=request.premises_id,
+        delivery_channel=request.delivery_channel,
         updated_at=request.updated_at,
         raw_input=raw,
         classification=request.classification,
+        match_trace=request.match_trace if staff_view else None,
+        fallback_chain=request.fallback_chain if staff_view else None,
         allowed_transitions=sorted(allowed_transitions(request.status), key=lambda s: s.value),
     )
 
@@ -457,3 +465,105 @@ class ClassificationService:
             apply_transition(self._session, principal, request, RequestStatus.CLASSIFIED)
         if not confident and request.status is RequestStatus.CLASSIFIED:
             apply_transition(self._session, principal, request, RequestStatus.NEEDS_REVIEW)
+
+
+# Статусы, из которых допустимо назначение/переназначение (E3). Каждый имеет в §7
+# ребро в MATCHING (или уже MATCHING) → далее MATCHING→ASSIGNED.
+_ASSIGNABLE_STATUSES = frozenset(
+    {
+        RequestStatus.CLASSIFIED,
+        RequestStatus.NEEDS_REVIEW,
+        RequestStatus.MATCHING,
+        RequestStatus.DISPATCHED,
+        RequestStatus.FAILED_DISPATCH,
+    }
+)
+
+
+class AssignmentService:
+    """Подбор и назначение партнёра (E3): авто-ранжирование или ручное назначение.
+
+    Авто-режим тянет кандидатов из реестра kb-platform (по HTTP, арх-константа),
+    ранжирует (`Matcher`), пишет `partner_id`/`delivery_channel`/`fallback_chain`/
+    `match_trace` и ведёт FSM …→MATCHING→ASSIGNED. Создание `ServiceOrder` —
+    отдельный шаг (M2.4, FR-3.5, ADR-0002).
+    """
+
+    def __init__(self, session: AsyncSession, platform: PlatformClient, matcher: Matcher) -> None:
+        self._session = session
+        self._repo = RequestRepository(session)
+        self._platform = platform
+        self._matcher = matcher
+
+    async def assign(
+        self, principal: Principal, request_id: uuid.UUID, body: AssignRequest
+    ) -> RequestDetail:
+        request = await self._repo.get_visible(principal, request_id, for_update=True)
+        if request is None:
+            raise ProblemException.not_found()
+        # Назначение/переназначение — оператор или агент (FR-3.4).
+        if not can_drive_lifecycle(principal):
+            raise ProblemException.forbidden(detail="Assignment not allowed for subject")
+        if request.status not in _ASSIGNABLE_STATUSES:
+            raise ProblemException.conflict(
+                detail=f"Assignment not allowed in status {request.status.value}"
+            )
+
+        if body.partner_id is not None:
+            self._apply_manual(request, body.partner_id)
+        else:
+            await self._apply_auto(request, body.service_area)
+
+        self._route_to_assigned(principal, request)
+        self._session.add(
+            RequestHistory(
+                request_id=request.id,
+                actor_id=principal.on_behalf_of or principal.user_id,
+                action=HistoryAction.ASSIGNED,
+                from_value="manual" if body.partner_id is not None else "auto",
+                to_value=request.partner_id,
+            )
+        )
+        detail = build_detail(principal, request)  # до commit (FOR UPDATE экспайрит)
+        await self._session.commit()
+        _logger.info(
+            "request assigned: number=%s partner=%s channel=%s",
+            request.number,
+            request.partner_id,
+            request.delivery_channel,
+        )
+        return detail
+
+    def _apply_manual(self, request: ServiceRequest, partner_id: str) -> None:
+        """Ручное назначение: партнёр задан оператором/агентом (FR-3.4)."""
+        request.partner_id = partner_id
+        request.delivery_channel = None  # канал определит диспетчеризация (E4) из конфига
+        request.fallback_chain = []
+        request.match_trace = {"method": "manual", "partner_id": partner_id}
+
+    async def _apply_auto(self, request: ServiceRequest, service_area: str | None) -> None:
+        """Авто-подбор: кандидаты из реестра → ранжирование → запись результата."""
+        if request.category is None:
+            raise ProblemException.conflict(detail="Request must be classified before matching")
+        candidates = await self._platform.search_candidates(
+            category=request.category.value, service_area=service_area
+        )
+        result = self._matcher.rank(
+            candidates, category=request.category.value, service_area=service_area
+        )
+        if result is None:
+            # Нет пригодных партнёров — назначить нечего (human-handoff остаётся оператору).
+            raise ProblemException.unprocessable(detail="No eligible partner found")
+        request.partner_id = result.partner_id
+        request.delivery_channel = result.delivery_channel
+        request.fallback_chain = result.fallback_chain
+        request.match_trace = {
+            **result.match_trace,
+            "matched_at": datetime.datetime.now(datetime.UTC).isoformat(),
+        }
+
+    def _route_to_assigned(self, principal: Principal, request: ServiceRequest) -> None:
+        """Провести FSM в ASSIGNED через MATCHING (§7)."""
+        if request.status is not RequestStatus.MATCHING:
+            apply_transition(self._session, principal, request, RequestStatus.MATCHING)
+        apply_transition(self._session, principal, request, RequestStatus.ASSIGNED)

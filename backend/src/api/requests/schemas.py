@@ -101,9 +101,14 @@ class RequestDetail(RequestRead):
     product_code: str | None
     booking_id: str | None
     premises_id: str | None
+    delivery_channel: str | None
     updated_at: datetime.datetime
     raw_input: str
     classification: dict[str, Any] | None
+    # match_trace / fallback_chain — операторская объяснимость подбора; раскрываются
+    # только сотрудникам (раскрытие конкурентов-партнёров заявителю/партнёру недопустимо).
+    match_trace: dict[str, Any] | None
+    fallback_chain: list[str] | None
     allowed_transitions: list[RequestStatus]
 
 
@@ -159,6 +164,19 @@ class CancelRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     reason: str = Field(min_length=1, max_length=_MAX_MESSAGE)
+
+
+class AssignRequest(BaseModel):
+    """Тело `POST /requests/{id}/assign` (§11.1, E3).
+
+    `partner_id` задан → ручное назначение/переназначение (FR-3.4). Пусто →
+    авто-подбор по реестру (`service_area` — опциональный гео-фильтр, FR-3.1).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    partner_id: str | None = Field(default=None, max_length=_MAX_ID)
+    service_area: str | None = Field(default=None, max_length=_MAX_ID)
 
 
 class RequestListResponse(BaseModel):
