@@ -15,6 +15,7 @@ from typing import Protocol
 import httpx
 
 from api.channels.adapters.bot import MaxChannel, TelegramChannel
+from api.channels.adapters.email import EmailChannel
 from api.channels.adapters.mock import MockChannel
 from api.channels.adapters.partner_api import PartnerApiChannel
 from api.channels.enums import ChannelType
@@ -62,11 +63,18 @@ class HttpChannelResolver:
             return self._bot(self._settings.telegram_api_base_url, ChannelType.TELEGRAM)
         if config.channel_type is ChannelType.MAX:
             return self._bot(self._settings.max_api_base_url, ChannelType.MAX)
+        if config.channel_type is ChannelType.EMAIL:
+            return self._email()
         raise NotImplementedError(f"channel {config.channel_type.value} requires an ADR")
 
     @contextlib.asynccontextmanager
     async def _mock(self) -> AsyncIterator[DeliveryChannel]:
         yield MockChannel()
+
+    @contextlib.asynccontextmanager
+    async def _email(self) -> AsyncIterator[DeliveryChannel]:
+        """EmailChannel — SMTP (без httpx); креды/from из настроек."""
+        yield EmailChannel(self._settings)
 
     @contextlib.asynccontextmanager
     async def _bot(
