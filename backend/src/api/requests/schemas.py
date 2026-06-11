@@ -189,6 +189,17 @@ class SettlementConfirm(BaseModel):
     escrow_ref: str | None = Field(default=None, max_length=_MAX_ID)
 
 
+class PartnerResponse(BaseModel):
+    """Тело `POST /requests/{id}/partner-response` — ответ партнёра (E10, FR-10.2)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: str = Field(
+        min_length=1, max_length=64, description="accepted/rejected/in_progress/done"
+    )
+    message: str | None = Field(default=None, max_length=_MAX_MESSAGE)
+
+
 class AssignRequest(BaseModel):
     """Тело `POST /requests/{id}/assign` (§11.1, E3).
 

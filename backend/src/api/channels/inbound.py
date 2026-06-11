@@ -28,24 +28,15 @@ from api.channels.repository import InboundRepository
 from api.channels.schemas import InboundEnvelope
 from api.errors import ProblemException
 from api.observability.logging import get_logger
-from api.requests.enums import AuthorType, RequestStatus
+from api.requests.enums import AuthorType
 from api.requests.models import RequestMessage, ServiceRequest
-from api.requests.service import apply_transition
+from api.requests.partner import advance_partner_status
 from api.sla.engine import SlaPolicy
 
 _logger = get_logger("inbound")
 
 # Окно свежести таймстемпа (сек) — защита от replay старых сообщений.
 _TIMESTAMP_WINDOW = 300
-
-# Партнёрский статус → целевой статус FSM (§7, FR-5.3). Отклонение → MATCHING
-# (возврат в пул, авто-fallback к следующему партнёру — веха M4/E6).
-_STATUS_TARGET: dict[str, RequestStatus] = {
-    "accepted": RequestStatus.ACCEPTED,
-    "rejected": RequestStatus.MATCHING,
-    "in_progress": RequestStatus.IN_PROGRESS,
-    "done": RequestStatus.DONE,
-}
 
 # Системный субъект для атрибуции FSM-переходов, инициированных входящим (канал).
 _CHANNEL_PRINCIPAL = Principal(user_id=DISPATCH_ACTOR_ID, kind=PrincipalKind.SERVICE)
@@ -146,15 +137,7 @@ class InboundService:
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
     def _advance_status(self, request: ServiceRequest, partner_status: str) -> None:
-        target = _STATUS_TARGET.get(partner_status.lower())
-        if target is None:
-            raise ProblemException.unprocessable(detail=f"Unknown partner status: {partner_status}")
-        if target is request.status:
-            return  # уже в целевом статусе — идемпотентно
-        apply_transition(self._session, _CHANNEL_PRINCIPAL, request, target)
-        if target is RequestStatus.ACCEPTED:
-            # SLA выполнения стартует с принятия партнёром (FR-6.1).
-            assert request.accepted_at is not None  # проставлен apply_transition(ACCEPTED)
-            sla = self._policy.set_perform_deadline(request.sla, request.accepted_at)
-            sla["perform_started_at"] = request.accepted_at.isoformat()
-            request.sla = sla
+        # Общая логика маппинга статуса партнёра на FSM (с порталом E10).
+        advance_partner_status(
+            self._session, _CHANNEL_PRINCIPAL, request, partner_status, self._policy
+        )

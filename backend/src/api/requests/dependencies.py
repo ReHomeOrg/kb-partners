@@ -32,6 +32,7 @@ from api.matching.engine import Matcher
 from api.requests.acceptance import AcceptanceService
 from api.requests.context import ContextService
 from api.requests.enums import Category, RequestStatus
+from api.requests.partner import PartnerService
 from api.requests.repository import RequestListFilters
 from api.requests.service import (
     AssignmentService,
@@ -39,6 +40,7 @@ from api.requests.service import (
     IntakeService,
     RequestService,
 )
+from api.sla.engine import SlaPolicy
 
 # Кеш реестра партнёров — процесс-синглтон (справочные read-only данные переживают
 # запросы). HTTP-клиент/breaker — per-request (жизненный цикл httpx у вызывающего,
@@ -63,6 +65,11 @@ def get_intake_service(session: AsyncSession = Depends(get_session)) -> IntakeSe
 def get_request_service(session: AsyncSession = Depends(get_session)) -> RequestService:
     """Сервис чтения/жизненного цикла заявок на сессию запроса."""
     return RequestService(session)
+
+
+def get_partner_service(session: AsyncSession = Depends(get_session)) -> PartnerService:
+    """Сервис портала партнёра (E10): ответ по заявке + SLA-политика."""
+    return PartnerService(session, SlaPolicy.from_settings(get_settings()))
 
 
 def get_classification_service(

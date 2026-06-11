@@ -635,6 +635,59 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /api/v1/partners/requests/{request_id}/partner-response:
+    parameters:
+      - name: request_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Requests]
+      summary: Ответ партнёра (портал LIGHT)
+      operationId: partnerResponse
+      description: >-
+        E10/FR-10.2. Партнёр accepted/rejected/in_progress/done по своей заявке.
+        Только партнёр (403); чужая → 404; запрещённый переход → 409; неизвестный → 422.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PartnerResponse"
+      responses:
+        "200":
+          description: Новое состояние карточки.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestDetail"
+        "403":
+          description: Доступно только партнёру-исполнителю.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Заявка не найдена или недоступна.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Запрещённый переход (FSM).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Неизвестный статус партнёра.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /api/v1/partners/requests/{request_id}/requester-context:
     parameters:
       - name: request_id
@@ -1324,6 +1377,21 @@ components:
         escrow_ref:
           type: string
           maxLength: 255
+
+    PartnerResponse:
+      description: Ответ партнёра по заявке (E10, FR-10.2).
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: accepted / rejected / in_progress / done.
+        message:
+          type: string
+          maxLength: 20000
 
     RequesterContextResponse:
       description: Контекст заявителя из rehome.one (E9). Все поля опциональны.

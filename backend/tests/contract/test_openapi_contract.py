@@ -138,6 +138,12 @@ def test_spec_declares_requester_context(spec: dict[str, Any]) -> None:
     assert "RequesterContextResponse" in spec["components"]["schemas"]
 
 
+def test_spec_declares_partner_response(spec: dict[str, Any]) -> None:
+    # E10 (M7.1): ответ партнёра (портал LIGHT).
+    assert "post" in spec["paths"]["/api/v1/partners/requests/{request_id}/partner-response"]
+    assert "PartnerResponse" in spec["components"]["schemas"]
+
+
 def test_spec_declares_inbound_operation(spec: dict[str, Any]) -> None:
     # E5 (M3.3): подписанный webhook партнёра (публичный — security: []).
     inbound = spec["paths"]["/api/v1/partners/inbound/api/{token}"]["post"]

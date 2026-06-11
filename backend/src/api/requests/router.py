@@ -27,9 +27,11 @@ from api.requests.dependencies import (
     get_context_service,
     get_intake_service,
     get_list_filters,
+    get_partner_service,
     get_request_service,
     require_service_principal,
 )
+from api.requests.partner import PartnerService
 from api.requests.repository import RequestListFilters
 from api.requests.schemas import (
     AssignRequest,
@@ -39,6 +41,7 @@ from api.requests.schemas import (
     FromTicketCreate,
     MessageCreate,
     MessageRead,
+    PartnerResponse,
     RequestCreate,
     RequestDetail,
     RequesterContextResponse,
@@ -274,6 +277,24 @@ async def cancel_request(
 ) -> RequestDetail:
     """Отмена из нетерминального статуса (§7); партнёру запрещена (403)."""
     return await service.cancel(principal, request_id, body.reason)
+
+
+@router.post(
+    "/{request_id}/partner-response",
+    response_model=RequestDetail,
+    summary="Ответ партнёра (портал LIGHT)",
+)
+async def partner_response(
+    request_id: uuid.UUID,
+    body: PartnerResponse,
+    principal: Principal = Depends(get_current_principal),
+    service: PartnerService = Depends(get_partner_service),
+) -> RequestDetail:
+    """E10/FR-10.2: партнёр accepted/rejected/in_progress/done по своей заявке.
+
+    Только партнёр (403); чужая → 404; запрещённый переход → 409; неизвестный статус → 422.
+    """
+    return await service.respond(principal, request_id, body)
 
 
 @router.get(
