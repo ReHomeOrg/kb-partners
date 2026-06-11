@@ -4,10 +4,40 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.channels.models import PartnerChannelConfig
+from api.channels.models import DispatchAttempt, PartnerChannelConfig
+
+
+class DispatchRepository:
+    """Доступ к попыткам диспетчеризации и активным каналам партнёра (E4)."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def active_channels_for(self, collaborator_id: str) -> list[PartnerChannelConfig]:
+        """Активные каналы партнёра по приоритету (§9.3)."""
+        stmt = (
+            select(PartnerChannelConfig)
+            .where(
+                PartnerChannelConfig.collaborator_id == collaborator_id,
+                PartnerChannelConfig.is_active.is_(True),
+            )
+            .order_by(PartnerChannelConfig.priority.asc())
+        )
+        return list((await self._session.execute(stmt)).scalars().all())
+
+    async def count_attempts(self, request_id: uuid.UUID) -> int:
+        stmt = (
+            select(func.count())
+            .select_from(DispatchAttempt)
+            .where(DispatchAttempt.request_id == request_id)
+        )
+        return int((await self._session.execute(stmt)).scalar_one())
+
+    def add_attempt(self, attempt: DispatchAttempt) -> None:
+        self._session.add(attempt)
 
 
 class ChannelConfigRepository:

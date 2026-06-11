@@ -109,6 +109,11 @@ def test_spec_declares_assign_operation(spec: dict[str, Any]) -> None:
     assert {"match_trace", "fallback_chain", "delivery_channel"} <= set(detail_props)
 
 
+def test_spec_declares_dispatch_operation(spec: dict[str, Any]) -> None:
+    # E4 (M3.2b): диспетчеризация.
+    assert "post" in spec["paths"]["/api/v1/partners/requests/{request_id}/dispatch"]
+
+
 def test_spec_declares_channels_operations(spec: dict[str, Any]) -> None:
     # M3.2a: CRUD каналов (admin).
     paths = spec["paths"]

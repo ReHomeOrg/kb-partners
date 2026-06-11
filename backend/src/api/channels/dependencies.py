@@ -7,7 +7,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.dependencies import get_current_principal
 from api.auth.principal import Principal
+from api.channels.dispatch import DispatchService
+from api.channels.resolver import HttpChannelResolver
 from api.channels.service import ChannelConfigService
+from api.config import get_settings
 from api.db import get_session
 from api.errors import ProblemException
 
@@ -23,3 +26,8 @@ async def require_staff_admin(
 
 def get_channel_service(session: AsyncSession = Depends(get_session)) -> ChannelConfigService:
     return ChannelConfigService(session)
+
+
+def get_dispatch_service(session: AsyncSession = Depends(get_session)) -> DispatchService:
+    """Сервис диспетчеризации (E4): резолвер каналов из конфигурации."""
+    return DispatchService(session, HttpChannelResolver(get_settings()))

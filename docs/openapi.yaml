@@ -459,6 +459,48 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /api/v1/partners/requests/{request_id}/dispatch:
+    parameters:
+      - name: request_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Requests]
+      summary: Диспетчеризация партнёру (operator/agent)
+      operationId: dispatchRequest
+      description: >-
+        E4 (FR-4.1–4.6). Доставка по каналу с наивысшим priority среди активных;
+        fallback по партнёрам цепочки; исчерпание → FAILED_DISPATCH. Каждая попытка —
+        DispatchAttempt.
+      responses:
+        "200":
+          description: Результат диспетчеризации (DISPATCHED или FAILED_DISPATCH).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestDetail"
+        "403":
+          description: Действие недоступно субъекту.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Заявка не найдена или недоступна.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Диспетчеризация недопустима в текущем статусе.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /api/v1/partners/requests/{request_id}/messages:
     parameters:
       - name: request_id

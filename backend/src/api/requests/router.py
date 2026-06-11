@@ -16,6 +16,8 @@ from fastapi import APIRouter, Depends, Header, Query, Response, status
 
 from api.auth.dependencies import get_current_principal
 from api.auth.principal import Principal
+from api.channels.dependencies import get_dispatch_service
+from api.channels.dispatch import DispatchService
 from api.requests.dependencies import (
     get_assignment_service,
     get_classification_service,
@@ -191,6 +193,21 @@ async def assign_request(
     Невидимая → 404; нет прав → 403; недопустимый статус → 409; нет кандидатов → 422.
     """
     return await service.assign(principal, request_id, body)
+
+
+@router.post(
+    "/{request_id}/dispatch",
+    response_model=RequestDetail,
+    summary="Диспетчеризация партнёру (operator/agent)",
+)
+async def dispatch_request(
+    request_id: uuid.UUID,
+    principal: Principal = Depends(get_current_principal),
+    service: DispatchService = Depends(get_dispatch_service),
+) -> RequestDetail:
+    """E4: доставка по каналу с наивысшим priority; fallback по цепочке; исчерпание →
+    FAILED_DISPATCH. Невидимая → 404; нет прав → 403; статус не ASSIGNED → 409."""
+    return await service.dispatch(principal, request_id)
 
 
 @router.post(
