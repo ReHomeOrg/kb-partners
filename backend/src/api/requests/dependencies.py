@@ -22,7 +22,7 @@ from api.classifier.yandexgpt import build_llm_provider
 from api.clients.auth import build_token_provider
 from api.clients.cache import InMemoryCache
 from api.clients.factory import build_resilient_client
-from api.clients.platform.adapter import HttpPlatformClient
+from api.clients.platform.factory import build_platform_client
 from api.clients.rehome.adapter import HttpRehomeOneClient
 from api.clients.support.adapter import HttpKbSupportClient
 from api.config import get_settings
@@ -92,7 +92,8 @@ async def get_assignment_service(
     async with httpx.AsyncClient(
         base_url=settings.platform_api_base_url, timeout=settings.client_timeout_seconds
     ) as http:
-        platform = HttpPlatformClient(
+        platform = build_platform_client(
+            settings=settings,
             http_client=build_resilient_client("platform", http, settings),
             token_provider=build_token_provider(
                 settings, fallback_token=settings.platform_api_token

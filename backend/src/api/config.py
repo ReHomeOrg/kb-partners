@@ -143,6 +143,14 @@ class Settings(BaseSettings):
     platform_cache_ttl_seconds: int = Field(
         default=300, ge=1, description="TTL кеша справочных данных kb-platform (сек). Read-only."
     )
+    platform_test_fixtures: bool = Field(
+        default=False,
+        description=(
+            "dev/test: реестр Collaborator из встроенных тест-партнёров "
+            "(FixturePlatformClient) вместо HTTP к kb-platform — для сквозного прогона "
+            "«Консьержа» без живого соседа. В production всегда false (config-gated mock)."
+        ),
+    )
 
     # --- rehome.one: контекст User/Premises/Booking + платёжный контур
     # (escrow/комиссия/выплата). Деньги не считаем — только ссылки/триггеры. ---
