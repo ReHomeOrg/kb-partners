@@ -24,7 +24,8 @@ from api.classifier.yandexgpt import build_llm_provider
 from api.clients.auth import build_token_provider
 from api.clients.cache import InMemoryCache
 from api.clients.factory import build_resilient_client
-from api.clients.platform.adapter import HttpPlatformClient
+from api.clients.platform.factory import build_platform_client
+from api.clients.platform.protocol import PlatformClient
 from api.clients.rehome.adapter import HttpRehomeOneClient
 from api.config import Settings, get_settings
 from api.db import async_session_factory
@@ -60,7 +61,8 @@ async def _drain_on_create() -> int:
         ) as http,
         async_session_factory() as session,
     ):
-        platform = HttpPlatformClient(
+        platform = build_platform_client(
+            settings=settings,
             http_client=build_resilient_client("platform", http, settings),
             token_provider=build_token_provider(
                 settings, fallback_token=settings.platform_api_token
@@ -72,7 +74,7 @@ async def _drain_on_create() -> int:
         return await drain_on_create_batch(session, deps, settings=settings)
 
 
-def _automation_deps(settings: Settings, platform: HttpPlatformClient) -> AutomationDeps:
+def _automation_deps(settings: Settings, platform: PlatformClient) -> AutomationDeps:
     return AutomationDeps(
         engine=ClassifierEngine(build_llm_provider(settings)),
         confidence_threshold=settings.classifier_confidence_threshold,
@@ -131,7 +133,8 @@ async def _drain_notifications() -> int:
         ) as rehome_http,
         async_session_factory() as session,
     ):
-        platform = HttpPlatformClient(
+        platform = build_platform_client(
+            settings=settings,
             http_client=build_resilient_client("platform", platform_http, settings),
             token_provider=build_token_provider(
                 settings, fallback_token=settings.platform_api_token
