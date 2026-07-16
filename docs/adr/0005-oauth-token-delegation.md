@@ -38,10 +38,36 @@
 Секреты (`oauth_client_secret`) — ссылкой на kb-vault. Токены в логи не пишутся; ошибки
 token-endpoint → `ExternalServiceError` (без тела/токенов в сообщении).
 
+## Обновление 2026-07-16 — единый actor-claim `act.sub` (CC-1, решение David)
+
+В рамках CC-1 (сквозное делегирование в экосистеме) Архитектор утвердил переход на
+**стандартный RFC 8693 actor-claim `act.sub`** вместо трёх кастомных клеймов
+(`kbp_act_sub`/`kbc_act_sub`/нет у support). Разница в модели:
+
+- **Легаси-схема (`kbp_act_sub`):** токен агента = сервис-принципал, `sub` = агент,
+  а `kbp_act_sub` нёс sub ПОЛЬЗОВАТЕЛЯ → `on_behalf_of`. Правило «старое» — остаётся
+  только для обратной совместимости.
+- **Новая схема (`act.sub`):** обмен impersonation (token-exchange, `requested_subject`)
+  выдаёт токен, где **`sub` = пользователь**, а **`act.sub` = clientId агента**
+  (`kb-concierge-m2m`, постоянная строка, НЕ UUID). `azp` совпадает с `act.sub`.
+
+**Контракт валидатора partners** (правку делают отдельной задачей — David, вопрос 5;
+здесь фиксируем целевое поведение):
+- есть `act.sub` → авторизуем по `sub` как обычного пользователя; `act.sub` лишь
+  фиксирует, что действует агент (для аудита/ограничений агентских действий);
+- есть только легаси `kbp_act_sub` → как раньше (`on_behalf_of` = значение клейма);
+- **пришли оба поля (`act.sub` и `kbp_act_sub`) → `401`** (неоднозначность = отказ).
+
+Keycloak-реализация (rehome-deploy): client-scope `agent-actor` с hardcoded-маппером
+`act.sub=kb-concierge-m2m`, назначенный default'ом bearer-only целям. Деталь KC 26.0:
+маппер живёт на ЦЕЛЕВОМ клиенте (не на m2m) — impersonation-обмен игнорирует
+dedicated-мапперы запрашивающего клиента. Провалидировано round-trip на KC 26.0.
+
 ## Последствия
 
 - Боевая m2m-аутентификация включается env (`oauth_token_url`/`oauth_client_id`/
   `oauth_client_secret`); по умолчанию — dev StaticTokenProvider (поведение не меняется).
 - Закрыт давний TODO «реальный ClientCredentials провайдер после провижининга realm».
-- on-behalf-of: внутренняя авторизация — по `kbp_act_sub` (готово); downstream-делегация —
-  через `TokenExchangeProvider` по мере появления user-scoped downstream-вызовов.
+- on-behalf-of: **целевой контракт — `act.sub`** (см. обновление 2026-07-16);
+  `kbp_act_sub` остаётся как backcompat до правки валидатора отдельной задачей;
+  downstream-делегация — через `TokenExchangeProvider`.
