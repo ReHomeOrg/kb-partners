@@ -38,8 +38,11 @@ class Principal:
 
     `partner_id` заполняется для субъектов PARTNER и ограничивает видимость
     заявок партнёра (storage-level фильтр, §12). `on_behalf_of` — sub пользователя,
-    от имени которого действует агент (делегированная авторизация, FR-9.7).
-    `scopes` — гранулярные права из проверенного токена.
+    от имени которого действует агент (**легаси** `kbp_act_sub`, FR-9.7).
+    `acting_agent` — clientId агента из стандартного RFC 8693 `act.sub` (новая схема
+    CC-1: `sub` уже = пользователь, `act.sub` лишь фиксирует, что действует агент).
+    Легаси `on_behalf_of` и новый `acting_agent` **взаимоисключающие** (одновременно
+    в токене → 401 в верификаторе). `scopes` — гранулярные права из токена.
     """
 
     user_id: uuid.UUID
@@ -47,6 +50,7 @@ class Principal:
     scopes: frozenset[str] = field(default_factory=frozenset)
     partner_id: str | None = None
     on_behalf_of: uuid.UUID | None = None
+    acting_agent: str | None = None
 
     @property
     def is_operator(self) -> bool:
@@ -60,8 +64,15 @@ class Principal:
 
     @property
     def is_agent(self) -> bool:
-        """Является ли субъект ИИ-агентом-оркестратором (E9, tools-эндпоинты)."""
-        return self.kind is PrincipalKind.AGENT or AGENT_SCOPE in self.scopes
+        """Является ли субъект ИИ-агентом-оркестратором (E9, tools-эндпоинты).
+
+        True для легаси-схемы (`kbp_kind=agent`/`AGENT_SCOPE`) и для новой
+        (стандартный `act.sub` — `acting_agent` заполнен)."""
+        return (
+            self.kind is PrincipalKind.AGENT
+            or self.acting_agent is not None
+            or AGENT_SCOPE in self.scopes
+        )
 
     @property
     def is_staff_admin(self) -> bool:
