@@ -93,9 +93,50 @@ def test_claims_to_principal_defaults_and_bad_sub() -> None:
     p = claims_to_principal({"sub": str(uuid.uuid4())})
     assert p.kind is PrincipalKind.REQUESTER
     assert p.partner_id is None and p.on_behalf_of is None
+    assert p.acting_agent is None and p.is_agent is False
 
     with pytest.raises(ProblemException):
         claims_to_principal({"sub": "not-a-uuid"})
+
+
+def test_claims_to_principal_act_sub_new_scheme() -> None:
+    # Новая схема CC-1: sub = ПОЛЬЗОВАТЕЛЬ, act.sub = агент (clientId).
+    user_sub = uuid.uuid4()
+    p = claims_to_principal(
+        {
+            "sub": str(user_sub),
+            "act": {"sub": "kb-concierge-m2m"},
+            "azp": "kb-concierge-m2m",
+        }
+    )
+    assert p.user_id == user_sub
+    assert p.acting_agent == "kb-concierge-m2m"
+    assert p.is_agent is True
+    # sub уже = пользователь → on_behalf_of не ставится.
+    assert p.on_behalf_of is None
+
+
+def test_claims_to_principal_both_delegation_claims_401() -> None:
+    # act.sub и легаси kbp_act_sub одновременно → 401 (David, вопрос 4).
+    with pytest.raises(ProblemException) as exc:
+        claims_to_principal(
+            {
+                "sub": str(uuid.uuid4()),
+                "act": {"sub": "kb-concierge-m2m"},
+                "azp": "kb-concierge-m2m",
+                "kbp_act_sub": str(uuid.uuid4()),
+            }
+        )
+    assert exc.value.status == 401
+
+
+def test_claims_to_principal_act_sub_azp_mismatch_401() -> None:
+    # Целостность act.sub == azp; рассинхрон → 401.
+    with pytest.raises(ProblemException) as exc:
+        claims_to_principal(
+            {"sub": str(uuid.uuid4()), "act": {"sub": "kb-concierge-m2m"}, "azp": "impostor"}
+        )
+    assert exc.value.status == 401
 
 
 # --- JWKS cache -----------------------------------------------------------
