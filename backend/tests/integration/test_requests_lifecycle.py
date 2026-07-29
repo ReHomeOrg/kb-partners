@@ -263,13 +263,59 @@ async def test_partner_cannot_cancel_403(
     assert resp.status_code == 403
 
 
-async def test_cancel_terminal_request_409(
+async def test_cancel_paid_request_409(
     make_client: Callable[..., AsyncClient], session: AsyncSession
 ) -> None:
+    # Отмена НЕотменяемого терминального статуса (PAID) — 409 (ребра PAID→CANCELLED нет).
     operator = _principal(PrincipalKind.OPERATOR)
-    req = await _seed(session, status=RequestStatus.CANCELLED)
-    resp = await make_client(operator).post(f"{_BASE}/{req.id}/cancel", json={"reason": "повтор"})
+    req = await _seed(session, status=RequestStatus.PAID)
+    resp = await make_client(operator).post(f"{_BASE}/{req.id}/cancel", json={"reason": "поздно"})
     assert resp.status_code == 409
+
+
+async def test_cancel_already_cancelled_is_idempotent(
+    make_client: Callable[..., AsyncClient], session: AsyncSession
+) -> None:
+    # issue #4: повторная отмена уже отменённой заявки идемпотентна → 200 (не 409),
+    # причину первой отмены НЕ перезаписываем, нового перехода/аудита не добавляется.
+    owner = _principal(PrincipalKind.REQUESTER)
+    req = await _seed(session, requester_id=str(owner.user_id), status=RequestStatus.CANCELLED)
+    req.custom_fields = {"cancellation": {"reason": "исходная причина"}}
+    await session.commit()
+
+    resp = await make_client(owner).post(f"{_BASE}/{req.id}/cancel", json={"reason": "повтор"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "CANCELLED"
+
+    refreshed = await session.get(ServiceRequest, req.id)
+    assert refreshed is not None
+    assert refreshed.custom_fields["cancellation"]["reason"] == "исходная причина"
+    history = (
+        (await session.execute(select(RequestHistory).where(RequestHistory.request_id == req.id)))
+        .scalars()
+        .all()
+    )
+    assert history == []  # no-op: ни перехода, ни записи аудита
+
+
+async def test_agent_cancels_on_behalf_of_user(
+    make_client: Callable[..., AsyncClient], session: AsyncSession
+) -> None:
+    # FR-9.7/G7: агент отменяет заявку пользователя по делегированной авторизации;
+    # актор аудита = пользователь (on_behalf_of), не сервис-принципал агента.
+    user_id = uuid.uuid4()
+    agent = _principal(PrincipalKind.AGENT, on_behalf_of=user_id)
+    req = await _seed(session, requester_id=str(user_id))
+    resp = await make_client(agent).post(f"{_BASE}/{req.id}/cancel", json={"reason": "по просьбе"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "CANCELLED"
+    history = (
+        (await session.execute(select(RequestHistory).where(RequestHistory.request_id == req.id)))
+        .scalars()
+        .all()
+    )
+    assert len(history) == 1
+    assert history[0].actor_id == user_id
 
 
 # --- Сообщения и КРИТИЧНЫЙ инвариант is_internal ----------------------------

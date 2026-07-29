@@ -409,6 +409,11 @@ class RequestService:
             raise ProblemException.not_found()
         if not can_cancel(principal):
             raise ProblemException.forbidden(detail="Cancellation not allowed for subject")
+        # Идемпотентность (issue #4): повторная отмена уже отменённой заявки — no-op с
+        # текущим состоянием (200), НЕ 409. CANCELLED терминален (`ensure_transition` дал
+        # бы 409 на ребре CANCELLED→CANCELLED); причину первой отмены НЕ перезаписываем.
+        if request.status is RequestStatus.CANCELLED:
+            return build_detail(principal, request)
         apply_transition(self._session, principal, request, RequestStatus.CANCELLED)
         request.custom_fields = {**request.custom_fields, "cancellation": {"reason": reason}}
         detail = build_detail(principal, request)  # до commit (FOR UPDATE экспайрит)
