@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import datetime
 import uuid
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -40,16 +42,22 @@ def emit_event(
     request_id: uuid.UUID,
     number: str,
     status: RequestStatus,
+    scheduled_at: datetime.datetime | None = None,
 ) -> None:
-    """Поставить событие в outbox (если webhooks включены). Доставка — после commit."""
+    """Поставить событие в outbox (если webhooks включены). Доставка — после commit.
+
+    `scheduled_at` (опц.) добавляется в payload для событий переноса даты
+    (`request.rescheduled`), чтобы исполнитель узнал новую дату из самого события,
+    без повторного запроса карточки. ПДн не содержит (дата визита — не ПДн).
+    """
     if not get_settings().webhook_url:
         return
-    OutboxRepository(session).enqueue(
-        WEBHOOK_KIND,
-        {
-            "event": event,
-            "request_id": str(request_id),
-            "number": number,
-            "status": status.value,
-        },
-    )
+    payload: dict[str, Any] = {
+        "event": event,
+        "request_id": str(request_id),
+        "number": number,
+        "status": status.value,
+    }
+    if scheduled_at is not None:
+        payload["scheduled_at"] = scheduled_at.isoformat()
+    OutboxRepository(session).enqueue(WEBHOOK_KIND, payload)

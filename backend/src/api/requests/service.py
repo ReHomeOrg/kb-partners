@@ -445,8 +445,10 @@ class RequestService:
         (`_RESCHEDULABLE_STATUSES`); иначе 409. Прошедшая дата → 422. Партнёру-
         исполнителю запрещён (403), чужая/невидимая → 404. Делегирование — через
         `on_behalf_of` (FR-9.7). Идемпотентно: та же дата → no-op (200) без аудита/события.
-        Если партнёр уже уведомлён (DISPATCHED+) — событие `request.rescheduled` в webhook-
-        контур (idempotent через outbox), чтобы исполнитель узнал новую дату.
+        Если партнёр уже уведомлён (DISPATCHED+) — событие `request.rescheduled` в
+        webhook-контур с новой датой в payload (`scheduled_at`), чтобы исполнитель узнал
+        её из события. Идемпотентность даёт same-date no-op (событие не эмитится дважды),
+        а не outbox (enqueue всегда вставляет строку).
         """
         request = await self._repo.get_visible(principal, request_id, for_update=True)
         if request is None:
@@ -479,6 +481,7 @@ class RequestService:
                 request_id=request.id,
                 number=request.number,
                 status=request.status,
+                scheduled_at=scheduled_at,
             )
         detail = build_detail(principal, request)  # до commit (FOR UPDATE экспайрит)
         await self._session.commit()

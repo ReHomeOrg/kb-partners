@@ -15,13 +15,17 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
+import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.principal import Principal, PrincipalKind
+from api.config import Settings
+from api.outbox.models import OutboxMessage
 from api.requests.enums import AccessLevel, ChannelIn, RequestStatus
 from api.requests.models import RequestHistory, RequestMessage, ServiceRequest
+from api.webhooks import emitter
 
 _BASE = "/api/v1/partners/requests"
 
@@ -393,6 +397,54 @@ async def test_agent_reschedules_on_behalf_of_user(
         )
     )
     assert hist is not None and hist.actor_id == user_id
+
+
+async def _rescheduled_webhooks(session: AsyncSession) -> list[dict[str, Any]]:
+    rows = (
+        (await session.execute(select(OutboxMessage).where(OutboxMessage.kind == "webhook")))
+        .scalars()
+        .all()
+    )
+    return [r.payload for r in rows if r.payload.get("event") == "request.rescheduled"]
+
+
+async def test_reschedule_emits_event_with_new_date_at_dispatched(
+    make_client: Callable[..., AsyncClient],
+    session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # DISPATCHED — партнёр уведомлён → событие request.rescheduled с новой датой в payload.
+    monkeypatch.setattr(emitter, "get_settings", lambda: Settings(webhook_url="http://subscriber"))
+    owner = _principal(PrincipalKind.REQUESTER)
+    req = await _seed(session, requester_id=str(owner.user_id), status=RequestStatus.DISPATCHED)
+    when = _future()
+    resp = await make_client(owner).post(
+        f"{_BASE}/{req.id}/reschedule", json={"scheduled_at": when}
+    )
+    assert resp.status_code == 200
+    events = await _rescheduled_webhooks(session)
+    assert len(events) == 1
+    # payload несёт новую дату (исполнитель узнаёт её из события, без дозапроса карточки).
+    assert "scheduled_at" in events[0]
+    assert datetime.datetime.fromisoformat(
+        events[0]["scheduled_at"]
+    ) == datetime.datetime.fromisoformat(when)
+
+
+async def test_reschedule_at_assigned_does_not_emit_event(
+    make_client: Callable[..., AsyncClient],
+    session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # ASSIGNED вне notify-набора (партнёр ещё не уведомлён) → событие НЕ эмитится.
+    monkeypatch.setattr(emitter, "get_settings", lambda: Settings(webhook_url="http://subscriber"))
+    owner = _principal(PrincipalKind.REQUESTER)
+    req = await _seed(session, requester_id=str(owner.user_id), status=RequestStatus.ASSIGNED)
+    resp = await make_client(owner).post(
+        f"{_BASE}/{req.id}/reschedule", json={"scheduled_at": _future()}
+    )
+    assert resp.status_code == 200
+    assert await _rescheduled_webhooks(session) == []
 
 
 # --- Сообщения и КРИТИЧНЫЙ инвариант is_internal ----------------------------
