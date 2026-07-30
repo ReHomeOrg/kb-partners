@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.principal import Principal, PrincipalKind
 from api.classifier.engine import ClassifierEngine
+from api.clients.files.protocol import KbFilesClient
 from api.clients.platform.protocol import PlatformClient
 from api.config import get_settings
 from api.errors import ProblemException
@@ -346,6 +347,17 @@ class IntakeService:
         return request, True
 
 
+def attachment_owner_scope(request_id: uuid.UUID) -> str:
+    """Контракт владельца вложения в kb-files (#5): `partner:request:<id>`.
+
+    Загрузчик (Консьерж) кладёт байты в kb-files с этим owner_scope ПОСЛЕ создания
+    заявки, затем ссылается `file_id` в сообщении. kb-partners перед выдачей
+    presigned-URL сверяет owner_scope — защита от IDOR (нельзя прицепить чужой файл
+    и получить ссылку на него).
+    """
+    return f"partner:request:{request_id}"
+
+
 class RequestService:
     """Чтение и жизненный цикл заявок (M1.3): карточка, список, переходы FSM,
     сообщения/заметки, отмена.
@@ -354,9 +366,12 @@ class RequestService:
     ресурс → 404, видимый-но-без-прав → 403 (анти-enumeration, §12).
     """
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, *, files_client: KbFilesClient | None = None) -> None:
         self._session = session
         self._repo = RequestRepository(session)
+        # kb-files клиент опционален: без него (нет m2m-токена) вложения хранятся как
+        # непроверенные ссылки, download-URL не выдаётся (#5, config-gated).
+        self._files = files_client
 
     async def get_detail(self, principal: Principal, request_id: uuid.UUID) -> RequestDetail:
         request = await self._repo.get_visible(principal, request_id)
@@ -442,7 +457,7 @@ class RequestService:
             )
         )
         await self._session.commit()
-        return MessageRead.model_validate(message)
+        return await self._read_message(request.id, message)
 
     async def list_messages(self, principal: Principal, request_id: uuid.UUID) -> list[MessageRead]:
         request = await self._repo.get_visible(principal, request_id)
@@ -451,7 +466,52 @@ class RequestService:
         messages = await self._repo.list_messages(
             request.id, include_internal=can_view_internal(principal)
         )
-        return [MessageRead.model_validate(m) for m in messages]
+        return [await self._read_message(request.id, m) for m in messages]
+
+    async def _read_message(self, request_id: uuid.UUID, message: RequestMessage) -> MessageRead:
+        """Сериализовать сообщение, обогатив вложения проверкой в kb-files (#5)."""
+        read = MessageRead.model_validate(message)
+        if read.attachments:
+            read.attachments = [
+                await self._resolve_attachment(request_id, att) for att in read.attachments
+            ]
+        return read
+
+    async def _resolve_attachment(
+        self, request_id: uuid.UUID, attachment: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Проверить вложение в kb-files и выдать presigned download-URL (#5, G3, anti-IDOR).
+
+        Verified=True только если файл существует И принадлежит этой заявке
+        (owner_scope). Метаданные (тип/имя) берутся авторитетно из kb-files. Download-URL
+        выдаётся ТОЛЬКО для проверенных вложений. Без клиента / при недоступности kb-files —
+        ссылка остаётся непроверенной, URL не выдаётся (fail-safe).
+        """
+        resolved = dict(attachment)
+        file_id = str(attachment.get("file_id", ""))
+        if self._files is None or not file_id:
+            resolved.setdefault("verified", False)
+            return resolved
+
+        metadata = await self._files.get_metadata(file_id)
+        expected_scope = attachment_owner_scope(request_id)
+        if metadata is None or metadata.owner_scope != expected_scope:
+            resolved["verified"] = False
+            resolved.pop("download_url", None)
+            resolved.pop("download_url_expires_in", None)
+            return resolved
+
+        # Авторитетные метаданные из kb-files (не доверяем присланным клиентом).
+        resolved["content_type"] = metadata.content_type
+        resolved["filename"] = metadata.filename
+        resolved["size_bytes"] = metadata.size_bytes
+        resolved["verified"] = True
+
+        download = await self._files.get_download_url(file_id)
+        if download is not None:
+            resolved["download_url"] = download.url
+            resolved["download_url_expires_in"] = download.expires_in_seconds
+        return resolved
 
 
 # Статусы, из которых допустима (ре)классификация (E2). NEW — первичная;
