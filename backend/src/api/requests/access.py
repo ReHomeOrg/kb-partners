@@ -76,6 +76,11 @@ def can_cancel(principal: Principal) -> bool:
     return not principal.is_partner
 
 
+def can_reschedule(principal: Principal) -> bool:
+    """Перенос даты визита (issue #4) — пользователь/оператор/агент, не партнёр-исполнитель."""
+    return not principal.is_partner
+
+
 def can_user_action(principal: Principal) -> bool:
     """Приёмка/спор — действия пользователя/оператора (FR-7.1/7.2), не партнёра."""
     return not principal.is_partner

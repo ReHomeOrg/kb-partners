@@ -90,4 +90,5 @@ class HistoryAction(str, enum.Enum):
     MESSAGE_ADDED = "MESSAGE_ADDED"
     CLASSIFIED = "CLASSIFIED"
     ASSIGNED = "ASSIGNED"
+    RESCHEDULED = "RESCHEDULED"  # перенос даты визита (issue #4), без смены статуса
     ANONYMIZED = "ANONYMIZED"  # обезличивание ПДн по ретенции (NFR-12, 152-ФЗ)
