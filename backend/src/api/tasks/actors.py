@@ -3,6 +3,13 @@
 Актор инертен без реального брокера/воркера (StubBroker). Делегирует чистую async-
 логику дрейна, обёрнутую `asyncio.run` (актор — sync-функция). ops триггерит актор
 периодически (cron/планировщик) для добора PENDING-сообщений после сбоев.
+
+ОПС-ЧЕКЛИСТ — планировщик ОБЯЗАН триггерить ВСЕ дренеры (у каждого outbox-kind свой),
+иначе строки копятся PENDING молча:
+  drain_outbox_dispatch, drain_outbox_on_create, drain_outbox_webhook,
+  drain_outbox_notification, drain_outbox_concierge_callback (issue #7),
+  drain_outbox_partner_fallback.
+Набор имён закреплён тестом `test_drain_actors_registered` (контракт с деплоем).
 """
 
 from __future__ import annotations
@@ -13,6 +20,7 @@ import time
 import dramatiq
 import httpx
 
+from api.agent.drainer import drain_concierge_callback_batch
 from api.automation.autonomy import parse_autonomy
 from api.automation.pipeline import AutomationDeps, drain_on_create_batch
 from api.automation.timers import drain_partner_fallback_batch, scan_accept_timeouts
@@ -23,6 +31,7 @@ from api.classifier.engine import ClassifierEngine
 from api.classifier.yandexgpt import build_llm_provider
 from api.clients.auth import build_token_provider
 from api.clients.cache import InMemoryCache
+from api.clients.concierge import HttpConciergeClient
 from api.clients.factory import build_resilient_client
 from api.clients.platform.factory import build_platform_client
 from api.clients.platform.protocol import PlatformClient
@@ -157,6 +166,30 @@ def drain_outbox_notification() -> None:
     """Разослать уведомления заявителю/партнёру/оператору по seam-каналам (E8)."""
     processed = asyncio.run(_drain_notifications())
     _logger.info("outbox notification drain: processed=%d", processed)
+
+
+async def _drain_concierge_callbacks() -> int:
+    settings = get_settings()
+    async with (
+        httpx.AsyncClient(
+            base_url=settings.concierge_api_base_url, timeout=settings.client_timeout_seconds
+        ) as http,
+        async_session_factory() as session,
+    ):
+        client = HttpConciergeClient(
+            http_client=build_resilient_client("concierge", http, settings),
+            token_provider=build_token_provider(
+                settings, fallback_token=settings.concierge_api_token
+            ),
+        )
+        return await drain_concierge_callback_batch(session, client, settings=settings)
+
+
+@dramatiq.actor(max_retries=0)
+def drain_outbox_concierge_callback() -> None:
+    """Доставить колбэки смены статуса в Консьерж (E9, U3, после commit)."""
+    processed = asyncio.run(_drain_concierge_callbacks())
+    _logger.info("outbox concierge_callback drain: processed=%d", processed)
 
 
 async def _scan_sla_timers() -> int:

@@ -187,6 +187,17 @@ class Settings(BaseSettings):
         default="", description="m2m-токен kb-support. ПУСТО → интеграция претензий инертна."
     )
 
+    # --- Консьерж (E9): исходящий колбэк смены статуса заявки в inbound-эндпоинт
+    # агента (U3, issue #7). Только для заявок из AI-чата (chat_session_id). m2m,
+    # ADR-0001/0005. ПУСТОЙ base_url → колбэк инертен (outbox-строки не плодятся). ---
+    concierge_api_base_url: str = Field(
+        default="",
+        description="Базовый URL Консьержа (inbound status-update). ПУСТО → колбэк выключен.",
+    )
+    concierge_api_token: str = Field(
+        default="", description="Плейсхолдер m2m-токена Консьержа (dev/test StaticTokenProvider)."
+    )
+
     # --- Классификатор категории (E2, §4.11). Детерминированные правила (быстрый
     # путь) + LLMProvider (env-switch, как в kb-search). Реальные LLM-SDK — только
     # через ADR (правило 6); пустой провайдер → NullLLMProvider (rules-only). ---

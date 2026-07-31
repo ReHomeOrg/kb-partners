@@ -21,6 +21,7 @@ from typing import Any
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.agent.callback import emit_concierge_status_update
 from api.auth.principal import Principal, PrincipalKind
 from api.classifier.engine import ClassifierEngine
 from api.clients.platform.protocol import PlatformClient
@@ -137,6 +138,15 @@ def apply_transition(
         status=target,
         requester_id=request.requester_id,
         partner_id=request.partner_id,
+    )
+    # Колбэк смены статуса в Консьерж (E9, U3, issue #7) — только для заявок из AI-чата
+    # и значимых статусов; если Консьерж не сконфигурирован — инертно.
+    emit_concierge_status_update(
+        session,
+        request_id=request.id,
+        number=request.number,
+        status=target,
+        source_ref=request.source_ref,
     )
 
 
