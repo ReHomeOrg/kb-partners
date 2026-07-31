@@ -3,6 +3,13 @@
 Актор инертен без реального брокера/воркера (StubBroker). Делегирует чистую async-
 логику дрейна, обёрнутую `asyncio.run` (актор — sync-функция). ops триггерит актор
 периодически (cron/планировщик) для добора PENDING-сообщений после сбоев.
+
+ОПС-ЧЕКЛИСТ — планировщик ОБЯЗАН триггерить ВСЕ дренеры (у каждого outbox-kind свой),
+иначе строки копятся PENDING молча:
+  drain_outbox_dispatch, drain_outbox_on_create, drain_outbox_webhook,
+  drain_outbox_notification, drain_outbox_concierge_callback (issue #7),
+  drain_outbox_partner_fallback.
+Набор имён закреплён тестом `test_drain_actors_registered` (контракт с деплоем).
 """
 
 from __future__ import annotations
