@@ -22,6 +22,7 @@ from api.classifier.yandexgpt import build_llm_provider
 from api.clients.auth import build_token_provider
 from api.clients.cache import InMemoryCache
 from api.clients.factory import build_resilient_client
+from api.clients.files.adapter import HttpKbFilesClient
 from api.clients.platform.factory import build_platform_client
 from api.clients.rehome.adapter import HttpRehomeOneClient
 from api.clients.support.adapter import HttpKbSupportClient
@@ -62,9 +63,29 @@ def get_intake_service(session: AsyncSession = Depends(get_session)) -> IntakeSe
     return IntakeService(session, automation_on_create=get_settings().automation_on_create_enabled)
 
 
-def get_request_service(session: AsyncSession = Depends(get_session)) -> RequestService:
-    """Сервис чтения/жизненного цикла заявок на сессию запроса."""
-    return RequestService(session)
+async def get_request_service(
+    session: AsyncSession = Depends(get_session),
+) -> AsyncIterator[RequestService]:
+    """Сервис чтения/жизненного цикла заявок на сессию запроса.
+
+    При наличии m2m-токена kb-files подключает клиент вложений (#5): проверка ссылок
+    и presigned download-URL. Без токена — вложения непроверены, URL не выдаётся
+    (config-gated, как остальные соседи). httpx-клиент открыт на время запроса.
+    """
+    settings = get_settings()
+    if not settings.kb_files_api_token:
+        yield RequestService(session)
+        return
+    async with httpx.AsyncClient(
+        base_url=settings.kb_files_api_base_url, timeout=settings.client_timeout_seconds
+    ) as http:
+        files = HttpKbFilesClient(
+            http_client=build_resilient_client("kb_files", http, settings),
+            token_provider=build_token_provider(
+                settings, fallback_token=settings.kb_files_api_token
+            ),
+        )
+        yield RequestService(session, files_client=files)
 
 
 def get_partner_service(session: AsyncSession = Depends(get_session)) -> PartnerService:
