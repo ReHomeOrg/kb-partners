@@ -37,6 +37,7 @@ from api.outbox.repository import OutboxRepository
 from api.requests.access import (
     can_cancel,
     can_drive_lifecycle,
+    can_reschedule,
     can_see_raw_input,
     can_view_internal,
 )
@@ -91,6 +92,25 @@ _AUTHOR_BY_KIND: dict[PrincipalKind, AuthorType] = {
 # Потолок размера страницы списка (§11 курсорная пагинация; анти-абьюз NFR-11).
 _MAX_PAGE_LIMIT = 100
 _DEFAULT_PAGE_LIMIT = 50
+
+# Reschedule (issue #4): перенос даты допустим, только когда исполнитель вовлечён и
+# работа не завершена (реш. Архитектора). Уведомляем партнёра (событие) лишь когда он
+# уже уведомлён о заявке — т.е. с DISPATCHED (при ASSIGNED дату он узнает на диспатче).
+_RESCHEDULABLE_STATUSES: frozenset[RequestStatus] = frozenset(
+    {
+        RequestStatus.ASSIGNED,
+        RequestStatus.DISPATCHED,
+        RequestStatus.ACCEPTED,
+        RequestStatus.IN_PROGRESS,
+    }
+)
+_RESCHEDULE_NOTIFY_STATUSES: frozenset[RequestStatus] = frozenset(
+    {
+        RequestStatus.DISPATCHED,
+        RequestStatus.ACCEPTED,
+        RequestStatus.IN_PROGRESS,
+    }
+)
 
 
 def apply_transition(
@@ -187,6 +207,7 @@ def build_detail(principal: Principal, request: ServiceRequest) -> RequestDetail
         dispute_id=request.dispute_id,
         claim_ref=request.claim_ref,
         updated_at=request.updated_at,
+        scheduled_at=request.scheduled_at,
         raw_input=raw,
         classification=request.classification,
         sla=sla,
@@ -442,6 +463,57 @@ class RequestService:
             return build_detail(principal, request)
         apply_transition(self._session, principal, request, RequestStatus.CANCELLED)
         request.custom_fields = {**request.custom_fields, "cancellation": {"reason": reason}}
+        detail = build_detail(principal, request)  # до commit (FOR UPDATE экспайрит)
+        await self._session.commit()
+        return detail
+
+    async def reschedule(
+        self, principal: Principal, request_id: uuid.UUID, scheduled_at: datetime.datetime
+    ) -> RequestDetail:
+        """Перенос даты визита (issue #4). Без смены статуса FSM.
+
+        Разрешён только когда исполнитель вовлечён и работа не завершена
+        (`_RESCHEDULABLE_STATUSES`); иначе 409. Прошедшая дата → 422. Партнёру-
+        исполнителю запрещён (403), чужая/невидимая → 404. Делегирование — через
+        `on_behalf_of` (FR-9.7). Идемпотентно: та же дата → no-op (200) без аудита/события.
+        Если партнёр уже уведомлён (DISPATCHED+) — событие `request.rescheduled` в
+        webhook-контур с новой датой в payload (`scheduled_at`), чтобы исполнитель узнал
+        её из события. Идемпотентность даёт same-date no-op (событие не эмитится дважды),
+        а не outbox (enqueue всегда вставляет строку).
+        """
+        request = await self._repo.get_visible(principal, request_id, for_update=True)
+        if request is None:
+            raise ProblemException.not_found()
+        if not can_reschedule(principal):
+            raise ProblemException.forbidden(detail="Reschedule not allowed for subject")
+        if scheduled_at.tzinfo is None:  # naive → трактуем как UTC (колонка timezone-aware)
+            scheduled_at = scheduled_at.replace(tzinfo=datetime.UTC)
+        if scheduled_at <= datetime.datetime.now(datetime.UTC):
+            raise ProblemException.unprocessable(detail="scheduled_at must be in the future")
+        if request.status not in _RESCHEDULABLE_STATUSES:
+            raise ProblemException.conflict(detail="Reschedule not allowed in current status")
+        if request.scheduled_at == scheduled_at:
+            return build_detail(principal, request)  # идемпотентный no-op
+        previous = request.scheduled_at
+        request.scheduled_at = scheduled_at
+        self._session.add(
+            RequestHistory(
+                request_id=request.id,
+                actor_id=principal.on_behalf_of or principal.user_id,
+                action=HistoryAction.RESCHEDULED,
+                from_value=previous.isoformat() if previous else None,
+                to_value=scheduled_at.isoformat(),
+            )
+        )
+        if request.status in _RESCHEDULE_NOTIFY_STATUSES:
+            emit_event(
+                self._session,
+                event="request.rescheduled",
+                request_id=request.id,
+                number=request.number,
+                status=request.status,
+                scheduled_at=scheduled_at,
+            )
         detail = build_detail(principal, request)  # до commit (FOR UPDATE экспайрит)
         await self._session.commit()
         return detail

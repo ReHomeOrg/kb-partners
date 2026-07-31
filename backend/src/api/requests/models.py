@@ -130,6 +130,11 @@ class ServiceRequest(Base, TimestampMixin):
     paid_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Запланированная дата/время визита исполнителя (reschedule, issue #4). NULL до
+    # назначения даты; индексируем под будущие SLA/напоминания.
+    scheduled_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
 
     __table_args__ = (
         # Идемпотентность приёма: уникален заполненный ключ (NULL не участвует).

@@ -108,6 +108,7 @@ class RequestDetail(RequestRead):
     dispute_id: str | None
     claim_ref: str | None
     updated_at: datetime.datetime
+    scheduled_at: datetime.datetime | None  # запланированная дата визита (reschedule, #4)
     raw_input: str
     classification: dict[str, Any] | None
     sla: dict[str, Any] | None
@@ -170,6 +171,17 @@ class CancelRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     reason: str = Field(min_length=1, max_length=_MAX_MESSAGE)
+
+
+class RescheduleRequest(BaseModel):
+    """Тело `POST /requests/{id}/reschedule` — перенос даты визита (issue #4).
+
+    `scheduled_at` — новая дата/время (aware). Прошедшая дата отклоняется сервисом (422).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    scheduled_at: datetime.datetime
 
 
 class DisputeRequest(BaseModel):

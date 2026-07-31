@@ -10,17 +10,22 @@
 
 from __future__ import annotations
 
+import datetime
 import uuid
 from collections.abc import Callable
 from typing import Any
 
+import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.principal import Principal, PrincipalKind
+from api.config import Settings
+from api.outbox.models import OutboxMessage
 from api.requests.enums import AccessLevel, ChannelIn, RequestStatus
 from api.requests.models import RequestHistory, RequestMessage, ServiceRequest
+from api.webhooks import emitter
 
 _BASE = "/api/v1/partners/requests"
 
@@ -273,6 +278,174 @@ async def test_cancel_paid_request_409(
     assert resp.status_code == 409
 
 
+# --- POST /{id}/reschedule (issue #4) ---------------------------------------
+
+
+def _future(days: int = 3) -> str:
+    return (datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=days)).isoformat()
+
+
+async def test_requester_reschedules_assigned_request(
+    make_client: Callable[..., AsyncClient], session: AsyncSession
+) -> None:
+    owner = _principal(PrincipalKind.REQUESTER)
+    req = await _seed(session, requester_id=str(owner.user_id), status=RequestStatus.ASSIGNED)
+    when = _future()
+    resp = await make_client(owner).post(
+        f"{_BASE}/{req.id}/reschedule", json={"scheduled_at": when}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["scheduled_at"] is not None
+    assert resp.json()["status"] == "ASSIGNED"  # статус НЕ меняется
+    refreshed = await session.get(ServiceRequest, req.id)
+    assert refreshed is not None and refreshed.scheduled_at is not None
+    hist = await session.scalar(
+        select(RequestHistory).where(
+            RequestHistory.request_id == req.id, RequestHistory.action == "RESCHEDULED"
+        )
+    )
+    assert hist is not None
+
+
+async def test_reschedule_wrong_status_409(
+    make_client: Callable[..., AsyncClient], session: AsyncSession
+) -> None:
+    # NEW не в наборе разрешённых (исполнитель ещё не вовлечён) → 409.
+    owner = _principal(PrincipalKind.REQUESTER)
+    req = await _seed(session, requester_id=str(owner.user_id), status=RequestStatus.NEW)
+    resp = await make_client(owner).post(
+        f"{_BASE}/{req.id}/reschedule", json={"scheduled_at": _future()}
+    )
+    assert resp.status_code == 409
+
+
+async def test_reschedule_past_date_422(
+    make_client: Callable[..., AsyncClient], session: AsyncSession
+) -> None:
+    owner = _principal(PrincipalKind.REQUESTER)
+    req = await _seed(session, requester_id=str(owner.user_id), status=RequestStatus.ASSIGNED)
+    past = (datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=1)).isoformat()
+    resp = await make_client(owner).post(
+        f"{_BASE}/{req.id}/reschedule", json={"scheduled_at": past}
+    )
+    assert resp.status_code == 422
+
+
+async def test_partner_cannot_reschedule_403(
+    make_client: Callable[..., AsyncClient], session: AsyncSession
+) -> None:
+    req = await _seed(session, partner_id="c-1", status=RequestStatus.DISPATCHED)
+    partner = _principal(PrincipalKind.PARTNER, partner_id="c-1")
+    resp = await make_client(partner).post(
+        f"{_BASE}/{req.id}/reschedule", json={"scheduled_at": _future()}
+    )
+    assert resp.status_code == 403
+
+
+async def test_reschedule_foreign_request_404(
+    make_client: Callable[..., AsyncClient], session: AsyncSession
+) -> None:
+    req = await _seed(session, requester_id="someone-else", status=RequestStatus.ASSIGNED)
+    stranger = _principal(PrincipalKind.REQUESTER)
+    resp = await make_client(stranger).post(
+        f"{_BASE}/{req.id}/reschedule", json={"scheduled_at": _future()}
+    )
+    assert resp.status_code == 404
+
+
+async def test_reschedule_idempotent_same_date(
+    make_client: Callable[..., AsyncClient], session: AsyncSession
+) -> None:
+    owner = _principal(PrincipalKind.REQUESTER)
+    req = await _seed(session, requester_id=str(owner.user_id), status=RequestStatus.ASSIGNED)
+    when = _future()
+    client = make_client(owner)
+    assert (
+        await client.post(f"{_BASE}/{req.id}/reschedule", json={"scheduled_at": when})
+    ).status_code == 200
+    # повтор с той же датой → 200, второй записи RESCHEDULED нет (no-op)
+    assert (
+        await client.post(f"{_BASE}/{req.id}/reschedule", json={"scheduled_at": when})
+    ).status_code == 200
+    hist = (
+        (
+            await session.execute(
+                select(RequestHistory).where(
+                    RequestHistory.request_id == req.id, RequestHistory.action == "RESCHEDULED"
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(hist) == 1
+
+
+async def test_agent_reschedules_on_behalf_of_user(
+    make_client: Callable[..., AsyncClient], session: AsyncSession
+) -> None:
+    # FR-9.7/G7: агент переносит дату по делегированной авторизации; актор = пользователь.
+    user_id = uuid.uuid4()
+    agent = _principal(PrincipalKind.AGENT, on_behalf_of=user_id)
+    req = await _seed(session, requester_id=str(user_id), status=RequestStatus.DISPATCHED)
+    resp = await make_client(agent).post(
+        f"{_BASE}/{req.id}/reschedule", json={"scheduled_at": _future()}
+    )
+    assert resp.status_code == 200
+    hist = await session.scalar(
+        select(RequestHistory).where(
+            RequestHistory.request_id == req.id, RequestHistory.action == "RESCHEDULED"
+        )
+    )
+    assert hist is not None and hist.actor_id == user_id
+
+
+async def _rescheduled_webhooks(session: AsyncSession) -> list[dict[str, Any]]:
+    rows = (
+        (await session.execute(select(OutboxMessage).where(OutboxMessage.kind == "webhook")))
+        .scalars()
+        .all()
+    )
+    return [r.payload for r in rows if r.payload.get("event") == "request.rescheduled"]
+
+
+async def test_reschedule_emits_event_with_new_date_at_dispatched(
+    make_client: Callable[..., AsyncClient],
+    session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # DISPATCHED — партнёр уведомлён → событие request.rescheduled с новой датой в payload.
+    monkeypatch.setattr(emitter, "get_settings", lambda: Settings(webhook_url="http://subscriber"))
+    owner = _principal(PrincipalKind.REQUESTER)
+    req = await _seed(session, requester_id=str(owner.user_id), status=RequestStatus.DISPATCHED)
+    when = _future()
+    resp = await make_client(owner).post(
+        f"{_BASE}/{req.id}/reschedule", json={"scheduled_at": when}
+    )
+    assert resp.status_code == 200
+    events = await _rescheduled_webhooks(session)
+    assert len(events) == 1
+    # payload несёт новую дату (исполнитель узнаёт её из события, без дозапроса карточки).
+    assert "scheduled_at" in events[0]
+    assert datetime.datetime.fromisoformat(
+        events[0]["scheduled_at"]
+    ) == datetime.datetime.fromisoformat(when)
+
+
+async def test_reschedule_at_assigned_does_not_emit_event(
+    make_client: Callable[..., AsyncClient],
+    session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # ASSIGNED вне notify-набора (партнёр ещё не уведомлён) → событие НЕ эмитится.
+    monkeypatch.setattr(emitter, "get_settings", lambda: Settings(webhook_url="http://subscriber"))
+    owner = _principal(PrincipalKind.REQUESTER)
+    req = await _seed(session, requester_id=str(owner.user_id), status=RequestStatus.ASSIGNED)
+    resp = await make_client(owner).post(
+        f"{_BASE}/{req.id}/reschedule", json={"scheduled_at": _future()}
+    )
+    assert resp.status_code == 200
+    assert await _rescheduled_webhooks(session) == []
 async def test_cancel_already_cancelled_is_idempotent(
     make_client: Callable[..., AsyncClient], session: AsyncSession
 ) -> None:

@@ -47,6 +47,7 @@ from api.requests.schemas import (
     RequesterContextResponse,
     RequestListResponse,
     RequestRead,
+    RescheduleRequest,
     SettlementConfirm,
     TransitionRequest,
 )
@@ -277,6 +278,23 @@ async def cancel_request(
 ) -> RequestDetail:
     """Отмена из нетерминального статуса (§7); партнёру запрещена (403)."""
     return await service.cancel(principal, request_id, body.reason)
+
+
+@router.post(
+    "/{request_id}/reschedule",
+    response_model=RequestDetail,
+    summary="Перенос даты визита (self-service Консьержа)",
+)
+async def reschedule_request(
+    request_id: uuid.UUID,
+    body: RescheduleRequest,
+    principal: Principal = Depends(get_current_principal),
+    service: RequestService = Depends(get_request_service),
+) -> RequestDetail:
+    """Перенос `scheduled_at` (issue #4, U7). Разрешён при вовлечённом исполнителе
+    (ASSIGNED/DISPATCHED/ACCEPTED/IN_PROGRESS) → иначе 409; прошлая дата → 422; партнёру
+    запрещён (403); чужая → 404. Делегирование — on-behalf-of. Идемпотентно (та же дата)."""
+    return await service.reschedule(principal, request_id, body.scheduled_at)
 
 
 @router.post(
