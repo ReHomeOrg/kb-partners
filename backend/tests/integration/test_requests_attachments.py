@@ -28,16 +28,21 @@ _BASE = "/api/v1/partners/requests"
 
 
 class _FakeFilesClient:
-    """In-memory kb-files: известные файлы → метаданные + presigned URL."""
+    """In-memory kb-files: известные файлы → метаданные + presigned URL.
 
-    def __init__(self, files: dict[str, FileMetadata]) -> None:
+    `url_available=False` моделирует частичную деградацию: метаданные ещё отдаются,
+    а выдача presigned-URL уже недоступна (get_download_url → None).
+    """
+
+    def __init__(self, files: dict[str, FileMetadata], *, url_available: bool = True) -> None:
         self._files = files
+        self._url_available = url_available
 
     async def get_metadata(self, file_id: str) -> FileMetadata | None:
         return self._files.get(file_id)
 
     async def get_download_url(self, file_id: str) -> DownloadUrl | None:
-        if file_id not in self._files:
+        if file_id not in self._files or not self._url_available:
             return None
         return DownloadUrl(url=f"https://s3.local/{file_id}?sig=test", expires_in_seconds=900)
 
@@ -62,10 +67,12 @@ async def _seed(session: AsyncSession, *, requester_id: str) -> ServiceRequest:
     return request
 
 
-def _wire_files(session: AsyncSession, files: dict[str, FileMetadata]) -> None:
+def _wire_files(
+    session: AsyncSession, files: dict[str, FileMetadata], *, url_available: bool = True
+) -> None:
     """Подменить get_request_service сервисом с fake kb-files-клиентом на тест-сессии."""
     app.dependency_overrides[get_request_service] = lambda: RequestService(
-        session, files_client=_FakeFilesClient(files)
+        session, files_client=_FakeFilesClient(files, url_available=url_available)
     )
 
 
@@ -174,6 +181,52 @@ async def test_without_files_client_attachment_unverified(
     resp = await make_client(owner).post(
         f"{_BASE}/{req.id}/messages",
         json={"text": "фото", "attachments": [{"file_id": "f-1"}]},
+    )
+    assert resp.status_code == 201
+    att = resp.json()["attachments"][0]
+    assert att["verified"] is False
+    assert "download_url" not in att
+
+
+async def test_verified_but_download_url_unavailable(
+    make_client: Callable[..., AsyncClient], session: AsyncSession
+) -> None:
+    # Частичная деградация: файл проверен (owner_scope совпал), но presigned-URL временно
+    # недоступен → verified=True, метаданные обогащены, download_url НЕ выдаётся (fail-safe).
+    owner = _principal(PrincipalKind.REQUESTER)
+    req = await _seed(session, requester_id=str(owner.user_id))
+    meta = FileMetadata(
+        file_id="f-ok",
+        owner_scope=attachment_owner_scope(req.id),
+        content_type="image/png",
+        size_bytes=512,
+        filename="ok.png",
+    )
+    _wire_files(session, {"f-ok": meta}, url_available=False)
+
+    resp = await make_client(owner).post(
+        f"{_BASE}/{req.id}/messages",
+        json={"text": "фото", "attachments": [{"file_id": "f-ok"}]},
+    )
+    assert resp.status_code == 201
+    att = resp.json()["attachments"][0]
+    assert att["verified"] is True
+    assert att["content_type"] == "image/png"  # метаданные обогащены
+    assert "download_url" not in att  # URL не выдан
+
+
+async def test_message_with_attachment_posts_when_kb_files_down(
+    make_client: Callable[..., AsyncClient], session: AsyncSession
+) -> None:
+    # Клиент есть, но kb-files недоступен (get_metadata → None на всё): сообщение всё равно
+    # постится (200), вложение помечено непроверенным, URL нет — деградация не блокирует поток.
+    owner = _principal(PrincipalKind.REQUESTER)
+    req = await _seed(session, requester_id=str(owner.user_id))
+    _wire_files(session, {})  # клиент присутствует, но ничего не знает (деградация)
+
+    resp = await make_client(owner).post(
+        f"{_BASE}/{req.id}/messages",
+        json={"text": "фото при недоступном kb-files", "attachments": [{"file_id": "f-x"}]},
     )
     assert resp.status_code == 201
     att = resp.json()["attachments"][0]

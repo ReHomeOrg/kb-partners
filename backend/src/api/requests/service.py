@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 import uuid
 from typing import Any
@@ -466,15 +467,20 @@ class RequestService:
         messages = await self._repo.list_messages(
             request.id, include_internal=can_view_internal(principal)
         )
-        return [await self._read_message(request.id, m) for m in messages]
+        # Резолвим сообщения конкурентно: у треда с несколькими фото каждая проверка в
+        # kb-files иначе шла бы последовательно (N+1 на горячем read-пути).
+        return list(await asyncio.gather(*(self._read_message(request.id, m) for m in messages)))
 
     async def _read_message(self, request_id: uuid.UUID, message: RequestMessage) -> MessageRead:
         """Сериализовать сообщение, обогатив вложения проверкой в kb-files (#5)."""
         read = MessageRead.model_validate(message)
         if read.attachments:
-            read.attachments = [
-                await self._resolve_attachment(request_id, att) for att in read.attachments
-            ]
+            # Вложения одного сообщения резолвим параллельно (независимые вызовы kb-files).
+            read.attachments = list(
+                await asyncio.gather(
+                    *(self._resolve_attachment(request_id, att) for att in read.attachments)
+                )
+            )
         return read
 
     async def _resolve_attachment(
