@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.auth.principal import Principal, PrincipalKind
 from api.channels.dependencies import get_dispatch_service
 from api.channels.dispatch import DispatchService
-from api.channels.enums import ChannelType, DeliveryOutcome, HealthStatus
+from api.channels.enums import ChannelRole, ChannelType, DeliveryOutcome, HealthStatus
 from api.channels.models import DispatchAttempt, PartnerChannelConfig
 from api.channels.protocol import (
     ChannelConfig,
@@ -231,3 +231,110 @@ async def test_dispatch_foreign_request_404(
     _use_resolver(session, {})
     resp = await make_client(stranger).post(f"{_BASE}/{req.id}/dispatch")
     assert resp.status_code == 404
+
+
+# --- Каналы-копии (ADR-0006, issue #3) -------------------------------------
+
+
+async def _seed_copy_channel(
+    session: AsyncSession, collaborator_id: str, *, channel_type: ChannelType = ChannelType.EMAIL
+) -> PartnerChannelConfig:
+    """Канал с ролью DUPLICATE — копия заявки, а не запасной вариант."""
+    config = PartnerChannelConfig(
+        collaborator_id=collaborator_id,
+        channel_type=channel_type,
+        priority=2,
+        role=ChannelRole.DUPLICATE,
+        config={},
+        is_active=True,
+    )
+    session.add(config)
+    await session.commit()
+    return config
+
+
+async def test_copy_channel_gets_the_request_after_the_primary(
+    make_client: Callable[..., AsyncClient], session: AsyncSession
+) -> None:
+    """Копия уходит ВДОБАВОК к основной доставке, а не вместо неё.
+
+    Раньше диспетч останавливался на первом успехе, и партнёр с рабочим основным
+    каналом копию не получал никогда — при том, что документ обещал ему письмо на
+    каждую заявку.
+    """
+    operator = _principal(PrincipalKind.OPERATOR)
+    req = await _seed_assigned(session, partner_id="c-1")
+    await _seed_channel(session, "c-1")
+    await _seed_copy_channel(session, "c-1")
+    _use_resolver(session, {"c-1": DeliveryOutcome.SENT})
+
+    resp = await make_client(operator).post(f"{_BASE}/{req.id}/dispatch")
+
+    assert resp.status_code == 200
+    assert resp.json()["delivery_channel"] == "MOCK", "основным остаётся основной канал"
+    assert await _attempt_count(session, req.id) == 2, "основная доставка + копия"
+
+
+async def test_copy_channel_is_not_used_as_a_fallback(
+    make_client: Callable[..., AsyncClient], session: AsyncSession
+) -> None:
+    """Если основной канал не сработал, копия не спасает: это не запасной вариант.
+
+    Иначе партнёр получил бы письмо вместо заявки в основном канале, а диспетч счёл
+    бы доставку успешной.
+    """
+    operator = _principal(PrincipalKind.OPERATOR)
+    req = await _seed_assigned(session, partner_id="c-1")
+    await _seed_channel(session, "c-1")
+    await _seed_copy_channel(session, "c-1")
+    _use_resolver(session, {"c-1": DeliveryOutcome.FAILED})
+
+    resp = await make_client(operator).post(f"{_BASE}/{req.id}/dispatch")
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == RequestStatus.FAILED_DISPATCH.value
+    assert await _attempt_count(session, req.id) == 1, "копия не пробовалась"
+
+
+async def test_failed_copy_does_not_break_a_successful_dispatch(
+    make_client: Callable[..., AsyncClient], session: AsyncSession
+) -> None:
+    """Сбой копии не двигает FSM: заявку партнёр уже принял.
+
+    Резолвер возвращает FAILED для копии, потому что её канал заведён на другого
+    партнёра-получателя; основная доставка при этом успешна.
+    """
+    operator = _principal(PrincipalKind.OPERATOR)
+    req = await _seed_assigned(session, partner_id="c-1")
+    await _seed_channel(session, "c-1")
+    # Копия на другой collaborator_id → в _MapResolver для него исход FAILED.
+    copy = await _seed_copy_channel(session, "c-1")
+    copy.collaborator_id = "c-1"
+    _use_resolver(session, {"c-1": DeliveryOutcome.SENT})
+
+    resp = await make_client(operator).post(f"{_BASE}/{req.id}/dispatch")
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == RequestStatus.DISPATCHED.value
+
+
+async def test_copy_attempt_has_its_own_idempotency_key(
+    make_client: Callable[..., AsyncClient], session: AsyncSession
+) -> None:
+    """Ключ копии не зависит от номера попытки — повтор drain'а не задвоит письмо."""
+    operator = _principal(PrincipalKind.OPERATOR)
+    req = await _seed_assigned(session, partner_id="c-1")
+    await _seed_channel(session, "c-1")
+    config = await _seed_copy_channel(session, "c-1")
+    _use_resolver(session, {"c-1": DeliveryOutcome.SENT})
+
+    await make_client(operator).post(f"{_BASE}/{req.id}/dispatch")
+
+    attempts = list(
+        (await session.execute(select(DispatchAttempt).where(DispatchAttempt.request_id == req.id)))
+        .scalars()
+        .all()
+    )
+    keys = {a.idempotency_key for a in attempts}
+    assert f"dispatch-copy:{req.id}:{config.id}" in keys
+    assert f"dispatch:{req.id}:1" in keys, "основная попытка нумеруется как раньше"

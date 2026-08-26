@@ -26,7 +26,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from api.channels.enums import ChannelType, DeliveryOutcome
+from api.channels.enums import ChannelRole, ChannelType, DeliveryOutcome
 from api.db.base import Base, TimestampMixin
 
 _ENUM_LEN = 32
@@ -45,6 +45,14 @@ class PartnerChannelConfig(Base, TimestampMixin):
         Enum(ChannelType, native_enum=False, length=_ENUM_LEN), nullable=False
     )
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
+    # Роль канала (ADR-0006): PRIMARY участвует в переборе фолбэка, DUPLICATE получает
+    # копию после успешной основной доставки. Дефолт сохраняет прежнее поведение.
+    role: Mapped[ChannelRole] = mapped_column(
+        Enum(ChannelRole, native_enum=False, length=_ENUM_LEN),
+        nullable=False,
+        default=ChannelRole.PRIMARY,
+        server_default=ChannelRole.PRIMARY.value,
+    )
     config: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, default=dict, server_default="{}"
     )

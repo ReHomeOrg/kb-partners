@@ -28,7 +28,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from api.channels.enums import ChannelType
+from api.channels.enums import ChannelRole, ChannelType
 from api.clients.platform.models import CollaboratorCandidate, PartnerContact
 
 # Натуральный ключ тест-партнёра = `collaborator_id` с этим префиксом (заменяет
@@ -54,14 +54,16 @@ _RATING_AGGREGATOR = 3.0  # агрегатор-fallback (документ: prior
 class SeedChannel:
     """Канал доставки тест-партнёра для сидов `PartnerChannelConfig` (§6.4).
 
-    `priority` — порядок выбора каналов (ASC, first-success). Документный
-    `role: primary` → меньший priority; `role: duplicate` → больший (диспетч берёт
-    ОДИН канал по возрастанию priority, копию на email он не шлёт — это фолбэк-канал).
+    `priority` — порядок перебора среди ОСНОВНЫХ каналов (ASC, first-success).
+    `role` — участвует ли канал в переборе вообще: DUPLICATE получает копию заявки
+    после успешной основной доставки (ADR-0006), как и описано в документе по
+    тест-партнёрам (§3 «копия заявки по почте»).
     """
 
     channel_type: ChannelType
     priority: int
     config: dict[str, Any]
+    role: ChannelRole = ChannelRole.PRIMARY
 
 
 @dataclass(frozen=True)
@@ -113,11 +115,12 @@ def _telegram(*, chat_id: str, handle: str) -> SeedChannel:
 
 
 def _email(*, to: str) -> SeedChannel:
-    """Email-канал-дубль (priority=2 → фолбэк, не копия; см. README)."""
+    """Email — КОПИЯ заявки (документ §3), а не фолбэк-канал."""
     return SeedChannel(
         channel_type=ChannelType.EMAIL,
         priority=2,
         config={"to": [to]},
+        role=ChannelRole.DUPLICATE,
     )
 
 

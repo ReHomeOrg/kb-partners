@@ -63,6 +63,6 @@ DELETE FROM partner_channel_configs WHERE collaborator_id LIKE 'test-%';
 | `coverage MSK/SPB` | `service_areas` (`msk`/`spb`, нижний регистр) |
 | `home_repair` | категория `REPAIR` |
 
-**Известный gap (вне scope сидов):** диспетч берёт ОДИН канал по возрастанию `priority`
-(first-success) и копию на email НЕ шлёт. Документный `role: duplicate` реализован как
-фолбэк-канал `priority=2`, а не как дубль-копия. Истинная копия — отдельная фича + ADR.
+**Email — копия, а не фолбэк.** Каналы с ролью `DUPLICATE` (ADR-0006) в переборе
+фолбэка не участвуют: копия уходит после успешной основной доставки, best-effort. Сбой
+копии не влияет ни на статус заявки, ни на выбор канала.

@@ -41,6 +41,7 @@ async def seed_test_partners(session: AsyncSession) -> int:
             "collaborator_id": partner.collaborator_id,
             "channel_type": channel.channel_type,
             "priority": channel.priority,
+            "role": channel.role,
             "config": channel.config,
             "is_active": True,
         }
@@ -52,6 +53,7 @@ async def seed_test_partners(session: AsyncSession) -> int:
         constraint=_CONFLICT_CONSTRAINT,
         set_={
             "priority": stmt.excluded.priority,
+            "role": stmt.excluded.role,
             "config": stmt.excluded.config,
             "is_active": stmt.excluded.is_active,
             "updated_at": func.now(),

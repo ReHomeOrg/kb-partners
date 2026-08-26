@@ -25,6 +25,7 @@ class ChannelConfigService:
             collaborator_id=body.collaborator_id,
             channel_type=body.channel_type,
             priority=body.priority,
+            role=body.role,
             config=body.config,
             inbound_token=body.inbound_token,
             is_active=body.is_active,
@@ -55,6 +56,8 @@ class ChannelConfigService:
         config = await self.get_or_404(config_id)
         if body.priority is not None:
             config.priority = body.priority
+        if body.role is not None:
+            config.role = body.role
         if body.config is not None:
             config.config = body.config
         if body.inbound_token is not None:
