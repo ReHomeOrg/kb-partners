@@ -15,7 +15,7 @@ from typing import Protocol
 import httpx
 
 from api.channels.adapters.bot import MaxChannel, TelegramChannel
-from api.channels.adapters.crm import AmoCrmChannel, Bitrix24Channel
+from api.channels.adapters.crm import AmoCrmChannel, Bitrix24Channel, RehomeCrmChannel
 from api.channels.adapters.email import EmailChannel
 from api.channels.adapters.mock import MockChannel
 from api.channels.adapters.partner_api import PartnerApiChannel
@@ -88,7 +88,10 @@ class HttpChannelResolver:
             base_url=endpoint, timeout=self._settings.client_timeout_seconds
         ) as http:
             resilient = build_resilient_client(f"crm_{crm_type or 'unknown'}", http, self._settings)
-            if crm_type == "amocrm":
+            if crm_type == "rehome":
+                # Наша собственная CRM: подрядчик ведёт заявку внутри нашей системы.
+                yield RehomeCrmChannel(resilient)
+            elif crm_type == "amocrm":
                 yield AmoCrmChannel(resilient)
             else:  # bitrix24 — дефолт самой распространённой РФ-CRM
                 yield Bitrix24Channel(resilient)
