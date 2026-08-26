@@ -176,3 +176,96 @@ def _bitrix_ref(response: Any) -> str | None:
     if isinstance(data, dict) and data.get("result") is not None:
         return str(data["result"])
     return None
+
+
+class RehomeCrmChannel:
+    """Доставка в НАШУ CRM (rehome.one): подрядчик ведёт заявку внутри нашей системы.
+
+    Отличается от Bitrix24/amoCRM тем, что получатель — не сторонняя система, а наш
+    же контур. Отсюда два следствия.
+
+    Первое: гейт не OAuth партнёра, а сервис-ключ (`X-Internal-Service-Key`) — тот
+    же механизм, которым ходят прочие соседи платформы.
+
+    Второе: контакт и адрес НЕ передаются. kb-partners их не хранит, и тащить
+    персональные данные с платформы сюда, чтобы вернуть обратно, — лишний круг.
+    Передаём идентификаторы объекта и брони, а контакт разрешает приёмная сторона,
+    у которой эти данные и так есть.
+
+    Идемпотентность — на стороне приёма, по `external_ref`: повтор доставки
+    возвращает ту же карточку и не откатывает её стадию.
+    """
+
+    channel_type = ChannelType.CRM
+
+    def __init__(self, http: ResilientHttpClient) -> None:
+        self._http = http
+
+    async def deliver(self, payload: DeliveryPayload, config: ChannelConfig) -> DeliveryResult:
+        service_key = str(config.config.get("service_key", ""))
+        if not service_key:
+            # Config-gated: без ключа канал инертен, а не «доставил как-нибудь».
+            return DeliveryResult(
+                outcome=DeliveryOutcome.FAILED, provider_response={"error": "missing_service_key"}
+            )
+        body: dict[str, Any] = {
+            "external_ref": payload.request_id,
+            "number": payload.number,
+            "category": payload.category,
+            "subject": _lead_title(payload),
+            "description": payload.summary,
+        }
+        if payload.premises_id:
+            body["premises_id"] = payload.premises_id
+        if payload.booking_id:
+            body["booking_id"] = payload.booking_id
+        try:
+            response = await self._http.request(
+                "POST",
+                "/api/v1/internal/crm/services/tickets",
+                operation="deliver",
+                headers={"X-Internal-Service-Key": service_key},
+                json=body,
+            )
+        except ExternalServiceError as exc:
+            return DeliveryResult(
+                outcome=DeliveryOutcome.FAILED, provider_response={"error": type(exc).__name__}
+            )
+        if response.status_code >= 400:
+            # 422 означает, что контакт или адрес не разрешились: карточка без них
+            # бесполезна, и доставка честно считается неуспешной.
+            return DeliveryResult(
+                outcome=DeliveryOutcome.FAILED, provider_response={"status": response.status_code}
+            )
+        return DeliveryResult(
+            outcome=DeliveryOutcome.SENT,
+            provider_response={"status": response.status_code},
+            external_ref=_rehome_ref(response),
+        )
+
+    async def parse_inbound(
+        self, payload: dict[str, Any], config: ChannelConfig
+    ) -> StatusUpdate | None:
+        """Обратный поток: стадия (и оценка) из нашей CRM приходят сюда.
+
+        Наша CRM ходит тем же подписанным webhook'ом, что и внешние партнёры: HMAC
+        по секрету канала, проверка свежести и дедуп по nonce уже есть в приёме.
+        Отдельный доверенный путь для «своих» пришлось бы охранять заново.
+        """
+        return _parse_inbound(payload)
+
+    async def healthcheck(self, config: ChannelConfig) -> Health:
+        """Доступность нашего же контура. Ключ отсутствует — канал неисправен."""
+        if not str(config.config.get("service_key", "")):
+            return Health(status=HealthStatus.UNHEALTHY, detail="missing_service_key")
+        return Health(status=HealthStatus.HEALTHY)
+
+
+def _rehome_ref(response: Any) -> str | None:
+    """Идентификатор карточки на нашей доске — для сверки при разборе."""
+    try:
+        data = response.json()
+    except Exception:  # noqa: BLE001 — тело не обязано быть JSON
+        return None
+    value = data.get("id") if isinstance(data, dict) else None
+    return str(value) if value else None

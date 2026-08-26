@@ -44,6 +44,13 @@ class DeliveryPayload:
     params: dict[str, Any]
     idempotency_key: str
     attachments: list[str] = field(default_factory=list)
+    # Идентификаторы объекта и брони на стороне rehome.one. Не ПДн: по ним ничего
+    # нельзя узнать, не имея доступа к платформе. Нужны каналу, который доставляет
+    # заявку внутрь нашего же контура (`RehomeCrmChannel`): контакт и адрес там
+    # разрешаются на месте, вместо того чтобы гонять персональные данные по сети.
+    # Внешние каналы (Bitrix24/amoCRM/мессенджеры/почта) их не используют.
+    premises_id: str | None = None
+    booking_id: str | None = None
 
 
 @dataclass(frozen=True)
