@@ -446,6 +446,8 @@ async def test_reschedule_at_assigned_does_not_emit_event(
     )
     assert resp.status_code == 200
     assert await _rescheduled_webhooks(session) == []
+
+
 async def test_cancel_already_cancelled_is_idempotent(
     make_client: Callable[..., AsyncClient], session: AsyncSession
 ) -> None:

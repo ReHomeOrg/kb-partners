@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import uuid
+from collections.abc import Sequence
 from typing import Any
 
 from sqlalchemy.exc import IntegrityError
@@ -51,11 +52,12 @@ from api.requests.enums import (
 )
 from api.requests.fsm import allowed_transitions, ensure_transition
 from api.requests.metrics import record_transition
-from api.requests.models import RequestHistory, RequestMessage, ServiceRequest
+from api.requests.models import RequestEstimate, RequestHistory, RequestMessage, ServiceRequest
 from api.requests.pagination import decode_cursor, encode_cursor
 from api.requests.repository import RequestListFilters, RequestRepository
 from api.requests.schemas import (
     AssignRequest,
+    EstimateRead,
     FromChatCreate,
     FromTicketCreate,
     MessageCreate,
@@ -172,11 +174,19 @@ def apply_transition(
     )
 
 
-def build_detail(principal: Principal, request: ServiceRequest) -> RequestDetail:
+def build_detail(
+    principal: Principal,
+    request: ServiceRequest,
+    *,
+    estimates: Sequence[RequestEstimate] | None = None,
+) -> RequestDetail:
     """Собрать карточку заявки с masking `raw_input` по scope (§11.1, FR-4.6).
 
     Строится из загруженного объекта — вызывать ДО commit для сущностей, прочитанных
     с FOR UPDATE (после commit они экспайрятся, ленивое дочитывание упадёт в async).
+
+    `estimates` передаются явно, а не подтягиваются связью: сборка синхронная, и
+    ленивая догрузка здесь упала бы в async-контексте по той же причине.
     """
     raw = request.raw_input if can_see_raw_input(principal, request) else request.raw_input_masked
     # Объяснимость подбора раскрывает id конкурентов-партнёров — только сотрудникам.
@@ -208,6 +218,7 @@ def build_detail(principal: Principal, request: ServiceRequest) -> RequestDetail
         claim_ref=request.claim_ref,
         updated_at=request.updated_at,
         scheduled_at=request.scheduled_at,
+        estimates=[EstimateRead.model_validate(e) for e in (estimates or ())],
         raw_input=raw,
         classification=request.classification,
         sla=sla,
@@ -409,7 +420,9 @@ class RequestService:
         request = await self._repo.get_visible(principal, request_id)
         if request is None:
             raise ProblemException.not_found()
-        return build_detail(principal, request)
+        return build_detail(
+            principal, request, estimates=await self._repo.estimates_for(request_id)
+        )
 
     async def list_requests(
         self,

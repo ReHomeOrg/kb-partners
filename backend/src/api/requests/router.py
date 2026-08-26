@@ -37,6 +37,7 @@ from api.requests.schemas import (
     AssignRequest,
     CancelRequest,
     DisputeRequest,
+    EstimateCreate,
     FromChatCreate,
     FromTicketCreate,
     MessageCreate,
@@ -313,6 +314,26 @@ async def partner_response(
     Только партнёр (403); чужая → 404; запрещённый переход → 409; неизвестный статус → 422.
     """
     return await service.respond(principal, request_id, body)
+
+
+@router.post(
+    "/{request_id}/estimate",
+    response_model=RequestDetail,
+    summary="Оценка партнёра (портал LIGHT)",
+)
+async def add_estimate(
+    request_id: uuid.UUID,
+    body: EstimateCreate,
+    principal: Principal = Depends(get_current_principal),
+    service: PartnerService = Depends(get_partner_service),
+) -> RequestDetail:
+    """Партнёр называет цену и срок по своей заявке (issue #6).
+
+    Оценка даётся по факту осмотра — как правило уже после выезда мастера, поэтому
+    записывается историей: уточнение добавляет строку, прежняя остаётся. Статус
+    заявки оценка не двигает.
+    """
+    return await service.add_estimate(principal, request_id, body)
 
 
 @router.get(

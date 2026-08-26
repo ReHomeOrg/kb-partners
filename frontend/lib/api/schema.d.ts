@@ -317,6 +317,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/partners/requests/{request_id}/estimate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Оценка партнёра (портал LIGHT)
+         * @description Партнёр называет цену и срок по своей заявке. Оценка даётся по факту осмотра — как правило уже после выезда мастера, поэтому записывается историей: уточнение добавляет строку, прежняя остаётся. Статус заявки оценка не двигает. Только партнёр (403); чужая заявка → 404; пустая оценка → 422.
+         */
+        post: operations["addEstimate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/partners/requests/{request_id}/partner-response": {
         parameters: {
             query?: never;
@@ -578,6 +600,8 @@ export interface components {
             /** @description Упорядоченные collaborator_id для авто-fallback (только сотрудникам). */
             fallback_chain: string[] | null;
             allowed_transitions: components["schemas"]["RequestStatus"][];
+            /** @description Оценки партнёра, новейшая первой. */
+            estimates?: components["schemas"]["EstimateRead"][];
         };
         /** @description partner_id задан → ручное назначение (FR-3.4); пусто → авто-подбор по реестру (service_area — опциональный гео-фильтр). */
         AssignRequest: {
@@ -627,6 +651,30 @@ export interface components {
         SettlementConfirm: {
             amount_ref?: string;
             escrow_ref?: string;
+        };
+        /** @description Оценка партнёра по заявке. Хотя бы одно из полей — сумма или срок — должно быть заполнено: пустая оценка это шум в истории, а не сведения. */
+        EstimateCreate: {
+            /**
+             * @description PRELIMINARY — до выезда, по описанию заявки. FINAL — по факту осмотра.
+             * @default FINAL
+             * @enum {string}
+             */
+            kind: "PRELIMINARY" | "FINAL";
+            /** @description Сумма в рублях. Может отсутствовать, если названа только дата выезда. */
+            amount_rub?: string | null;
+            /** @description Срок словами партнёра («сегодня до 18:00», «2–3 дня»). */
+            eta_text?: string | null;
+            comment?: string | null;
+        };
+        /** @description Оценка партнёра в карточке заявки. */
+        EstimateRead: {
+            /** @enum {string} */
+            kind: "PRELIMINARY" | "FINAL";
+            amount_rub?: string | null;
+            eta_text?: string | null;
+            comment?: string | null;
+            /** Format: date-time */
+            created_at: string;
         };
         /** @description Ответ партнёра по заявке (E10, FR-10.2). */
         PartnerResponse: {
@@ -1390,6 +1438,59 @@ export interface operations {
             };
             /** @description Диспетчеризация недопустима в текущем статусе. */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    addEstimate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EstimateCreate"];
+            };
+        };
+        responses: {
+            /** @description Карточка заявки с обновлённой историей оценок. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RequestDetail"];
+                };
+            };
+            /** @description Доступно только партнёру-исполнителю. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Заявка не найдена или недоступна. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Ни суммы, ни срока — не оценка. */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

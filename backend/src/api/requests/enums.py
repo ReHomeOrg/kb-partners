@@ -92,3 +92,16 @@ class HistoryAction(str, enum.Enum):
     ASSIGNED = "ASSIGNED"
     RESCHEDULED = "RESCHEDULED"  # перенос даты визита (issue #4), без смены статуса
     ANONYMIZED = "ANONYMIZED"  # обезличивание ПДн по ретенции (NFR-12, 152-ФЗ)
+
+
+class EstimateKind(str, enum.Enum):
+    """Вид оценки стоимости работ, названной партнёром (issue #6).
+
+    PRELIMINARY — до выезда, по описанию заявки: вилка «примерно столько».
+    FINAL — по факту осмотра, чаще всего уже после выезда мастера. Именно она
+    ложится в расчёт, поэтому обе хранятся историей: «сказал X, после осмотра Y» —
+    ровно тот разговор, который потом возникает с заявителем.
+    """
+
+    PRELIMINARY = "PRELIMINARY"
+    FINAL = "FINAL"

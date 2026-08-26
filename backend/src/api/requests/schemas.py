@@ -13,16 +13,25 @@ from __future__ import annotations
 
 import datetime
 import uuid
+from decimal import Decimal
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from api.requests.enums import AuthorType, Category, ChannelIn, RequestStatus
+from api.requests.enums import (
+    AuthorType,
+    Category,
+    ChannelIn,
+    EstimateKind,
+    RequestStatus,
+)
 
 # Предел длины свободного ввода (анти-абьюз публичной формы, NFR-11).
 _MAX_RAW_INPUT = 20_000
 _MAX_ID = 255
 _MAX_MESSAGE = 20_000
+# Потолок суммы оценки: защита от опечатки в кабинете (лишний ноль), а не бизнес-лимит.
+_MAX_AMOUNT_RUB = Decimal("9999999999.99")
 
 
 class RequestCreate(BaseModel):
@@ -90,6 +99,39 @@ class RequestRead(BaseModel):
     created_at: datetime.datetime
 
 
+class EstimateRead(BaseModel):
+    """Оценка партнёра в карточке заявки (issue #6)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    kind: EstimateKind
+    amount_rub: Decimal | None
+    eta_text: str | None
+    comment: str | None
+    created_at: datetime.datetime
+
+
+class EstimateCreate(BaseModel):
+    """Тело `POST /requests/{id}/estimate` — партнёр называет цену и срок.
+
+    Хотя бы одно из полей суммы/срока обязано быть заполнено: пустая оценка —
+    не оценка, а шум в истории.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: EstimateKind = EstimateKind.FINAL
+    amount_rub: Decimal | None = Field(default=None, ge=0, le=_MAX_AMOUNT_RUB)
+    eta_text: str | None = Field(default=None, max_length=255)
+    comment: str | None = Field(default=None, max_length=_MAX_MESSAGE)
+
+    @model_validator(mode="after")
+    def _not_empty(self) -> EstimateCreate:
+        if self.amount_rub is None and not (self.eta_text or "").strip():
+            raise ValueError("Укажите сумму или срок выполнения")
+        return self
+
+
 class RequestDetail(RequestRead):
     """Карточка заявки (§11.1): + `allowed_transitions` (источник истины — бэкенд, §7).
 
@@ -109,6 +151,9 @@ class RequestDetail(RequestRead):
     claim_ref: str | None
     updated_at: datetime.datetime
     scheduled_at: datetime.datetime | None  # запланированная дата визита (reschedule, #4)
+    # Оценки партнёра, новейшая первой (issue #6). Историю отдаём целиком: расхождение
+    # предварительной и финальной — то, о чём спрашивают при разборе с заявителем.
+    estimates: list[EstimateRead] = Field(default_factory=list)
     raw_input: str
     classification: dict[str, Any] | None
     sla: dict[str, Any] | None

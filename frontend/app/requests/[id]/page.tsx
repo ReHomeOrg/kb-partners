@@ -5,6 +5,7 @@ import { ApiError, getRequest, listMessages } from "@/lib/api/client";
 
 import { statusLabel } from "../format";
 
+import { EstimateForm } from "./EstimateForm";
 import { PartnerActions } from "./PartnerActions";
 
 export const dynamic = "force-dynamic";
@@ -42,6 +43,7 @@ export default async function RequestDetailPage({ params }: { params: { id: stri
       </section>
 
       <PartnerActions id={detail.id} status={detail.status} />
+      <EstimateForm id={detail.id} estimates={detail.estimates ?? []} />
 
       <section className="mt-6">
         <h2 className="text-sm font-medium text-gray-700">Сообщения</h2>

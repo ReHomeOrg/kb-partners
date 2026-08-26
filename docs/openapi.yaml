@@ -635,6 +635,55 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /api/v1/partners/requests/{request_id}/estimate:
+    parameters:
+      - name: request_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Requests]
+      summary: Оценка партнёра (портал LIGHT)
+      operationId: addEstimate
+      description: >-
+        Партнёр называет цену и срок по своей заявке. Оценка даётся по факту осмотра —
+        как правило уже после выезда мастера, поэтому записывается историей: уточнение
+        добавляет строку, прежняя остаётся. Статус заявки оценка не двигает.
+        Только партнёр (403); чужая заявка → 404; пустая оценка → 422.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EstimateCreate"
+      responses:
+        "200":
+          description: Карточка заявки с обновлённой историей оценок.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestDetail"
+        "403":
+          description: Доступно только партнёру-исполнителю.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Заявка не найдена или недоступна.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Ни суммы, ни срока — не оценка.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /api/v1/partners/requests/{request_id}/partner-response:
     parameters:
       - name: request_id
@@ -1330,6 +1379,11 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/RequestStatus"
+        estimates:
+          type: array
+          description: Оценки партнёра, новейшая первой.
+          items:
+            $ref: "#/components/schemas/EstimateRead"
 
     AssignRequest:
       description: >-
@@ -1452,6 +1506,63 @@ components:
         escrow_ref:
           type: string
           maxLength: 255
+
+    EstimateCreate:
+      description: >-
+        Оценка партнёра по заявке. Хотя бы одно из полей — сумма или срок — должно быть
+        заполнено: пустая оценка это шум в истории, а не сведения.
+      type: object
+      additionalProperties: false
+      properties:
+        kind:
+          type: string
+          enum: [PRELIMINARY, FINAL]
+          default: FINAL
+          description: >-
+            PRELIMINARY — до выезда, по описанию заявки. FINAL — по факту осмотра.
+        amount_rub:
+          oneOf:
+            - type: string
+              format: decimal
+            - type: "null"
+          description: Сумма в рублях. Может отсутствовать, если названа только дата выезда.
+        eta_text:
+          oneOf:
+            - type: string
+              maxLength: 255
+            - type: "null"
+          description: Срок словами партнёра («сегодня до 18:00», «2–3 дня»).
+        comment:
+          oneOf:
+            - type: string
+              maxLength: 20000
+            - type: "null"
+
+    EstimateRead:
+      description: Оценка партнёра в карточке заявки.
+      type: object
+      additionalProperties: false
+      required: [kind, created_at]
+      properties:
+        kind:
+          type: string
+          enum: [PRELIMINARY, FINAL]
+        amount_rub:
+          oneOf:
+            - type: string
+              format: decimal
+            - type: "null"
+        eta_text:
+          oneOf:
+            - type: string
+            - type: "null"
+        comment:
+          oneOf:
+            - type: string
+            - type: "null"
+        created_at:
+          type: string
+          format: date-time
 
     PartnerResponse:
       description: Ответ партнёра по заявке (E10, FR-10.2).

@@ -16,9 +16,9 @@ from api.config import get_settings
 from api.errors import ProblemException
 from api.outbox.repository import OutboxRepository
 from api.requests.enums import AuthorType, RequestStatus
-from api.requests.models import RequestMessage, ServiceRequest
+from api.requests.models import RequestEstimate, RequestMessage, ServiceRequest
 from api.requests.repository import RequestRepository
-from api.requests.schemas import PartnerResponse, RequestDetail
+from api.requests.schemas import EstimateCreate, PartnerResponse, RequestDetail
 from api.requests.service import apply_transition, build_detail
 from api.sla.engine import SlaPolicy
 
@@ -93,3 +93,35 @@ class PartnerService:
         detail = build_detail(principal, request)  # до commit (FOR UPDATE экспайрит)
         await self._session.commit()
         return detail
+
+    async def add_estimate(
+        self, principal: Principal, request_id: uuid.UUID, body: EstimateCreate
+    ) -> RequestDetail:
+        """Партнёр называет цену и срок по своей заявке (issue #6).
+
+        Оценка приходит по факту осмотра — как правило уже после выезда мастера, и
+        нередко расходится с предварительной. Поэтому запись append-only: уточнение —
+        новая строка, старая остаётся. Правка задним числом стёрла бы ровно то, что
+        спрашивают при разборе с заявителем.
+
+        Статус заявки оценка НЕ двигает: назвать цену и принять заявку — разные
+        действия, и связывать их значит заставлять партнёра делать одно ради другого.
+        """
+        request = await self._repo.get_visible(principal, request_id)
+        if request is None:
+            raise ProblemException.not_found()
+        if not principal.is_partner:
+            raise ProblemException.forbidden(detail="Partner portal is for partners only")
+        self._session.add(
+            RequestEstimate(
+                request_id=request.id,
+                kind=body.kind,
+                amount_rub=body.amount_rub,
+                eta_text=(body.eta_text or "").strip() or None,
+                comment=body.comment,
+                author_id=principal.partner_id or str(principal.user_id),
+            )
+        )
+        await self._session.commit()
+        estimates = await self._repo.estimates_for(request_id)
+        return build_detail(principal, request, estimates=estimates)

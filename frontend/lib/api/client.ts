@@ -47,6 +47,7 @@ export type RequestDetail = OkJson<"getRequest", 200>;
 export type MessageList = OkJson<"listRequestMessages", 200>;
 export type MessageRead = OkJson<"addRequestMessage", 201>;
 export type PartnerResponseInput = BodyJson<"partnerResponse">;
+export type EstimateInput = BodyJson<"addEstimate">;
 export type ListRequestsQuery = NonNullable<operations["listRequests"]["parameters"]["query"]>;
 // Операторские действия (рабочее место оператора, E2/E3/E4/E7/E9).
 export type TransitionInput = BodyJson<"transitionRequest">;
@@ -111,6 +112,15 @@ export async function partnerRespond(
   deps?: ApiFetchDeps,
 ): Promise<RequestDetail> {
   return postJson<RequestDetail>(`${PREFIX}/requests/${id}/partner-response`, body, deps);
+}
+
+/** Оценка партнёра по заявке — цена и срок по факту осмотра (issue #6). */
+export async function addEstimate(
+  id: string,
+  body: EstimateInput,
+  deps?: ApiFetchDeps,
+): Promise<RequestDetail> {
+  return postJson<RequestDetail>(`${PREFIX}/requests/${id}/estimate`, body, deps);
 }
 
 async function postJson<T>(path: string, body: unknown, deps?: ApiFetchDeps): Promise<T> {

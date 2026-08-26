@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.auth.principal import Principal
 from api.requests.access import ownership_condition, visible_access_levels
 from api.requests.enums import Category, RequestStatus
-from api.requests.models import RequestMessage, ServiceRequest
+from api.requests.models import RequestEstimate, RequestMessage, ServiceRequest
 from api.requests.pagination import Cursor
 
 __all__ = ["RequestRepository", "RequestListFilters"]
@@ -58,6 +58,15 @@ class RequestRepository:
     def add(self, request: ServiceRequest) -> None:
         """Поставить заявку в сессию (flush/commit — у сервиса)."""
         self._session.add(request)
+
+    async def estimates_for(self, request_id: uuid.UUID) -> list[RequestEstimate]:
+        """Оценки партнёра по заявке, новейшая первой (issue #6)."""
+        stmt = (
+            select(RequestEstimate)
+            .where(RequestEstimate.request_id == request_id)
+            .order_by(RequestEstimate.created_at.desc())
+        )
+        return list((await self._session.execute(stmt)).scalars().all())
 
     async def get_visible(
         self, principal: Principal, request_id: uuid.UUID, *, for_update: bool = False

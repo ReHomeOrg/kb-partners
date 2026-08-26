@@ -39,9 +39,7 @@ def test_direct_user_does_not_see_agent_contour() -> None:
     # Прямой пользователь (без агента) — только BASE-контур, AGENT не виден.
     principal = Principal(user_id=uuid.uuid4(), kind=PrincipalKind.REQUESTER)
     assert principal.is_agent is False
-    assert visible_access_levels(principal) == frozenset(
-        {AccessLevel.PUBLIC, AccessLevel.LOGGED}
-    )
+    assert visible_access_levels(principal) == frozenset({AccessLevel.PUBLIC, AccessLevel.LOGGED})
 
 
 def test_legacy_agent_ownership_uses_delegated_user() -> None:

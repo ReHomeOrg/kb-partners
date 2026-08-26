@@ -16,7 +16,17 @@ import datetime
 import uuid
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, String, Text, func
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Numeric,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -27,6 +37,7 @@ from api.requests.enums import (
     AuthorType,
     Category,
     ChannelIn,
+    EstimateKind,
     HistoryAction,
     RequestStatus,
 )
@@ -147,6 +158,50 @@ class ServiceRequest(Base, TimestampMixin):
         Index("ix_service_requests_category", "category"),
         Index("ix_service_requests_created_at", "created_at"),
     )
+
+
+class RequestEstimate(Base):
+    """Оценка стоимости работ, названная партнёром по конкретной заявке (issue #6).
+
+    Почему таблица, а не поле на заявке. Оценку даёт партнёр по факту осмотра —
+    как правило уже после выезда мастера, и нередко она расходится с тем, что он
+    называл по описанию. Историю надо хранить целиком: «до выезда сказали 3 000,
+    после осмотра 7 500» — это первое, что спросят при разборе с заявителем.
+
+    Записи append-only: уточнение — новая строка, а не правка старой. Правка
+    задним числом стёрла бы ровно то, ради чего таблица заведена.
+
+    Деньги здесь НЕ считаются (ADR-0002: источник истины по заказу — контур).
+    Хранится названное партнёром число как факт; в расчёт оно попадает через
+    контур, куда уезжает финальная оценка.
+    """
+
+    __tablename__ = "request_estimates"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    request_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("service_requests.id"),
+        nullable=False,
+        index=True,
+    )
+    kind: Mapped[EstimateKind] = mapped_column(
+        Enum(EstimateKind, native_enum=False, length=32), nullable=False
+    )
+    # Сумма в рублях. Nullable: партнёр может назвать только срок («смогу завтра,
+    # цена после осмотра») — отказывать в такой оценке значит терять сведения.
+    amount_rub: Mapped[Any | None] = mapped_column(Numeric(precision=12, scale=2), nullable=True)
+    # Срок выполнения словами партнёра: «сегодня до 18:00», «2–3 дня». Не парсим:
+    # нормализация чужих формулировок породила бы ошибки там, где нужен просто текст.
+    eta_text: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Кто назвал: id партнёра из принципала (PARTNER JWT) либо оператор от его имени.
+    author_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (Index("ix_request_estimates_request_created", "request_id", "created_at"),)
 
 
 class RequestMessage(Base):
