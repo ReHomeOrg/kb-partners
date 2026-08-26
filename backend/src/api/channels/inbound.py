@@ -18,6 +18,7 @@ import time
 import uuid
 from collections.abc import Callable
 
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,8 +29,8 @@ from api.channels.repository import InboundRepository
 from api.channels.schemas import InboundEnvelope
 from api.errors import ProblemException
 from api.observability.logging import get_logger
-from api.requests.enums import AuthorType
-from api.requests.models import RequestMessage, ServiceRequest
+from api.requests.enums import AuthorType, EstimateKind
+from api.requests.models import RequestEstimate, RequestMessage, ServiceRequest
 from api.requests.partner import advance_partner_status
 from api.sla.engine import SlaPolicy
 
@@ -97,7 +98,21 @@ class InboundService:
         if request is None or request.partner_id != config.collaborator_id:
             raise ProblemException.not_found()
 
-        self._advance_status(request, envelope.status)
+        # Статус двигаем только если он есть: конверт может нести одну оценку.
+        if envelope.status is not None:
+            self._advance_status(request, envelope.status)
+        if envelope.estimate_amount is not None or (envelope.estimate_note or "").strip():
+            # Оценка append-only: уточнение добавляет строку, прежняя остаётся —
+            # расхождение предварительной и финальной спрашивают при разборе.
+            self._session.add(
+                RequestEstimate(
+                    request_id=request.id,
+                    kind=EstimateKind.FINAL,
+                    amount_rub=envelope.estimate_amount,
+                    eta_text=(envelope.estimate_note or "").strip() or None,
+                    author_id=config.collaborator_id,
+                )
+            )
         if envelope.message is not None:
             self._session.add(
                 RequestMessage(
@@ -115,7 +130,7 @@ class InboundService:
         _logger.info(
             "inbound processed: number=%s partner_status=%s status=%s",
             request.number,
-            envelope.status,
+            envelope.status or "-",
             request.status.value,
         )
         return {"status": "ok"}
@@ -126,7 +141,12 @@ class InboundService:
             data = json.loads(raw_body)
         except (ValueError, UnicodeDecodeError) as exc:
             raise ProblemException.unprocessable(detail="Malformed inbound body") from exc
-        return InboundEnvelope.model_validate(data)
+        try:
+            return InboundEnvelope.model_validate(data)
+        except ValidationError as exc:
+            # Тело разобрано, но конверт неполон (напр. ни статуса, ни оценки).
+            # Отвечаем 422 в общем формате ошибок, а не пятисоткой валидатора.
+            raise ProblemException.unprocessable(detail="Invalid inbound envelope") from exc
 
     async def _correlate(self, request_ref: str) -> ServiceRequest | None:
         try:
