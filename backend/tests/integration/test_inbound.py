@@ -187,3 +187,80 @@ async def test_inbound_unknown_status_422(
     body, headers = _signed({"request_ref": str(req.id), "status": "weird", "nonce": "n7"})
     resp = await make_client(None).post(_url(), content=body, headers=headers)
     assert resp.status_code == 422
+
+
+# --- оценка тем же конвертом (issue #6) --------------------------------------
+
+
+async def test_inbound_estimate_without_status_does_not_move_the_request(
+    make_client: Callable[..., AsyncClient], session: AsyncSession
+) -> None:
+    """Партнёр назвал цену — заявка осталась на том же шаге.
+
+    Подставленный «текущий» статус двигал бы FSM побочным эффектом от ввода суммы,
+    поэтому статус в конверте необязателен.
+    """
+    from api.requests.models import RequestEstimate
+
+    req = await _seed_request(session)
+    await _seed_channel(session)
+    body, headers = _signed(
+        {
+            "request_ref": str(req.id),
+            "nonce": "est-1",
+            "estimate_amount": "7500.00",
+            "estimate_note": "завтра до 18:00",
+        }
+    )
+
+    resp = await make_client(None).post(_url(), content=body, headers=headers)
+
+    assert resp.status_code == 200, resp.text
+    refreshed = await session.get(ServiceRequest, req.id)
+    assert refreshed is not None and refreshed.status is RequestStatus.DISPATCHED
+    estimate = await session.scalar(
+        select(RequestEstimate).where(RequestEstimate.request_id == req.id)
+    )
+    assert estimate is not None
+    assert str(estimate.amount_rub) == "7500.00"
+    assert estimate.eta_text == "завтра до 18:00"
+
+
+async def test_inbound_status_and_estimate_arrive_together(
+    make_client: Callable[..., AsyncClient], session: AsyncSession
+) -> None:
+    from api.requests.models import RequestEstimate
+
+    req = await _seed_request(session)
+    await _seed_channel(session)
+    body, headers = _signed(
+        {
+            "request_ref": str(req.id),
+            "status": "accepted",
+            "nonce": "est-2",
+            "estimate_amount": "3000",
+        }
+    )
+
+    resp = await make_client(None).post(_url(), content=body, headers=headers)
+
+    assert resp.status_code == 200
+    refreshed = await session.get(ServiceRequest, req.id)
+    assert refreshed is not None and refreshed.status is RequestStatus.ACCEPTED
+    estimate = await session.scalar(
+        select(RequestEstimate).where(RequestEstimate.request_id == req.id)
+    )
+    assert estimate is not None
+
+
+async def test_inbound_empty_envelope_is_rejected(
+    make_client: Callable[..., AsyncClient], session: AsyncSession
+) -> None:
+    """Ни статуса, ни оценки — событие ни о чём."""
+    req = await _seed_request(session)
+    await _seed_channel(session)
+    body, headers = _signed({"request_ref": str(req.id), "nonce": "est-3"})
+
+    resp = await make_client(None).post(_url(), content=body, headers=headers)
+
+    assert resp.status_code == 422

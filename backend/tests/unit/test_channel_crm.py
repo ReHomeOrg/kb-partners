@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
+from typing import Any
+
 import httpx
 
-from api.channels.adapters.crm import AmoCrmChannel, Bitrix24Channel
+from api.channels.adapters.crm import AmoCrmChannel, Bitrix24Channel, RehomeCrmChannel
 from api.channels.enums import ChannelType, DeliveryOutcome, HealthStatus
 from api.channels.protocol import ChannelConfig, DeliveryPayload
 from api.clients.base import ResilientHttpClient
@@ -99,3 +102,69 @@ async def test_bitrix_healthcheck() -> None:
     channel = Bitrix24Channel(_resilient(lambda r: httpx.Response(200, json={"result": {}})))
     health = await channel.healthcheck(_config(webhook_path="/rest/1/tok/"))
     assert health.status is HealthStatus.HEALTHY
+
+
+# --- наша CRM: подрядчик ведёт заявку внутри нашей системы -------------------
+
+
+def _rehome_payload() -> DeliveryPayload:
+    return DeliveryPayload(
+        request_id="r1",
+        number="RQ-1",
+        category="REPAIR",
+        summary="течёт кран",
+        params={},
+        idempotency_key="dispatch:r1:1",
+        premises_id="pr-1",
+        booking_id="bk-1",
+    )
+
+
+async def test_rehome_crm_sends_identifiers_not_personal_data() -> None:
+    """Контакт и адрес не передаются: их разрешает приёмная сторона, у которой они
+    и так есть. Гонять персональные данные туда-обратно незачем."""
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen["key"] = request.headers.get("X-Internal-Service-Key")
+        seen["body"] = json.loads(request.content.decode())
+        return httpx.Response(201, json={"id": "tkt-1", "created": True})
+
+    channel = RehomeCrmChannel(_resilient(handler))
+    result = await channel.deliver(_rehome_payload(), _config(service_key="k"))
+
+    assert result.outcome is DeliveryOutcome.SENT
+    assert result.external_ref == "tkt-1"
+    assert seen["path"] == "/api/v1/internal/crm/services/tickets"
+    assert seen["key"] == "k"
+    body = seen["body"]
+    assert body["external_ref"] == "r1"
+    assert body["premises_id"] == "pr-1"
+    assert body["booking_id"] == "bk-1"
+    assert "contact_phone" not in body and "address_text" not in body
+
+
+async def test_rehome_crm_without_service_key_is_inert() -> None:
+    """Без ключа канал не «доставляет как-нибудь», а честно отказывает."""
+    result = await RehomeCrmChannel(_resilient(lambda r: httpx.Response(201))).deliver(
+        _rehome_payload(), _config()
+    )
+
+    assert result.outcome is DeliveryOutcome.FAILED
+    assert result.provider_response == {"error": "missing_service_key"}
+
+
+async def test_rehome_crm_treats_422_as_failed_delivery() -> None:
+    """422 означает, что контакт или адрес не разрешились. Карточка без них
+    бесполезна — доставка неуспешна, и диспетч пойдёт дальше по цепочке."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(422, json={"detail": "не удалось определить телефон"})
+
+    result = await RehomeCrmChannel(_resilient(handler)).deliver(
+        _rehome_payload(), _config(service_key="k")
+    )
+
+    assert result.outcome is DeliveryOutcome.FAILED
+    assert result.provider_response == {"status": 422}

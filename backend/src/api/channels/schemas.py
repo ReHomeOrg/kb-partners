@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import datetime
 import uuid
+from decimal import Decimal
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from api.channels.enums import ChannelType
 
@@ -43,9 +44,26 @@ class InboundEnvelope(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     request_ref: str = Field(min_length=1, max_length=_MAX_ID)
-    status: str = Field(min_length=1, max_length=64)
+    # Статус необязателен: событие может нести только оценку. Партнёр назвал цену —
+    # заявка при этом осталась на том же шаге, и двигать её FSM побочным эффектом
+    # от ввода суммы нельзя.
+    status: str | None = Field(default=None, min_length=1, max_length=64)
     nonce: str = Field(min_length=1, max_length=_MAX_ID)
     message: str | None = Field(default=None, max_length=20_000)
+    # Оценка работ по факту осмотра (issue #6). Едет тем же конвертом: заводить
+    # второй транспорт ради неё значило бы дублировать подпись, дедуп и корреляцию.
+    estimate_amount: Decimal | None = Field(default=None, ge=0)
+    estimate_note: str | None = Field(default=None, max_length=255)
+
+    @model_validator(mode="after")
+    def _not_empty(self) -> InboundEnvelope:
+        if (
+            self.status is None
+            and self.estimate_amount is None
+            and not (self.estimate_note or "").strip()
+        ):
+            raise ValueError("нужен статус или оценка")
+        return self
 
 
 class ChannelConfigRead(BaseModel):

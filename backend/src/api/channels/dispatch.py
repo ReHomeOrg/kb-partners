@@ -65,6 +65,8 @@ def _build_payload(request: ServiceRequest, attempt_no: int) -> DeliveryPayload:
         summary=request.raw_input_masked,
         params=params,
         idempotency_key=f"dispatch:{request.id}:{attempt_no}",
+        premises_id=str(request.premises_id) if request.premises_id else None,
+        booking_id=str(request.booking_id) if request.booking_id else None,
     )
 
 
