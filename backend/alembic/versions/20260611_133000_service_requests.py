@@ -124,9 +124,7 @@ def upgrade() -> None:
         sa.Column("action", sa.String(length=_ENUM_LEN), nullable=False),
         sa.Column("from_value", sa.String(length=255), nullable=True),
         sa.Column("to_value", sa.String(length=255), nullable=True),
-        sa.Column(
-            "ts", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
-        ),
+        sa.Column("ts", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.ForeignKeyConstraint(
             ["request_id"], ["service_requests.id"], name="fk_request_history_request_id"
         ),

@@ -25,6 +25,7 @@ import api.channels.models  # noqa: F401
 import api.outbox.models  # noqa: F401
 import api.push.models  # noqa: F401
 import api.requests.models  # noqa: F401
+
 # ...
 from api.config import get_settings
 from api.db.base import Base
