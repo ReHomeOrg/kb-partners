@@ -16,6 +16,21 @@ class ChannelType(str, enum.Enum):
     MOCK = "MOCK"  # dev/test — только при config-gating, не в production-сборке
 
 
+class ChannelRole(str, enum.Enum):
+    """Роль канала в доставке (ADR-0006). Ортогональна `priority`.
+
+    PRIMARY — участвует в переборе фолбэка: каналы пробуются по возрастанию priority,
+    перебор останавливается на первом успехе. DUPLICATE — в переборе НЕ участвует и
+    получает копию заявки после успешной основной доставки.
+
+    Приоритет отвечает на вопрос «в каком порядке пробовать», роль — «вместо или
+    вдобавок»; одним полем это не выражается: `priority=2` не значит «всегда».
+    """
+
+    PRIMARY = "PRIMARY"
+    DUPLICATE = "DUPLICATE"
+
+
 class DeliveryOutcome(str, enum.Enum):
     """Исход доставки / статус попытки (`DispatchAttempt.status`, §6.5)."""
 

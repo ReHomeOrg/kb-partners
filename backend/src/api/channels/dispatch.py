@@ -9,6 +9,10 @@ ASSIGNED→DISPATCHED (commit-1, durable), затем best-effort СИНХРОН
 Выбор канала по priority среди активных каналов партнёра (§9.3); провал всех каналов
 партнёра → следующий из `fallback_chain`; исчерпание → DISPATCHED→FAILED_DISPATCH
 (FR-4.5). В канал — минимальный состав по категории (FR-4.6), без сырых ПДн.
+
+Каналы с ролью DUPLICATE (ADR-0006) в переборе не участвуют: они получают КОПИЮ заявки
+после успешной основной доставки, best-effort. Сбой копии не валит диспетч и не двигает
+FSM — партнёр заявку уже принял.
 """
 
 from __future__ import annotations
@@ -130,10 +134,62 @@ async def execute_dispatch(
         sla = policy.set_accept_deadline(request.sla, request.dispatched_at)
         sla["accept_started_at"] = request.dispatched_at.isoformat()
         request.sla = sla
+        # Копии — ПОСЛЕ успешной основной доставки и best-effort (ADR-0006).
+        await _deliver_copies(
+            dispatch_repo, resolver, request, chosen_partner, attempt_no=attempt_no
+        )
         return True
 
     apply_transition(session, _DISPATCH_PRINCIPAL, request, RequestStatus.FAILED_DISPATCH)
     return False
+
+
+async def _deliver_copies(
+    dispatch_repo: DispatchRepository,
+    resolver: ChannelResolver,
+    request: ServiceRequest,
+    partner_id: str,
+    *,
+    attempt_no: int,
+) -> None:
+    """Разослать копии заявки в каналы с ролью DUPLICATE (ADR-0006).
+
+    Best-effort и НЕ влияет ни на исход диспетча, ни на FSM: заявка уже принята
+    партнёром, и откатывать её из-за неотправленной копии хуже, чем копию не отправить.
+    Сбой пишется попыткой в журнал — молчаливой потери нет.
+
+    Ключ идемпотентности копии не зависит от номера попытки
+    (`dispatch-copy:{request}:{config}`): повторный drain того же outbox-сообщения не
+    должен отправить письмо дважды, а у партнёра ключ дедупликации остаётся стабильным.
+    """
+    for config in await dispatch_repo.duplicate_channels_for(partner_id):
+        attempt_no += 1
+        try:
+            result = await _attempt_delivery(resolver, request, config, attempt_no)
+        except Exception:  # noqa: BLE001 — копия не вправе уронить успешный диспетч
+            _logger.warning(
+                "duplicate delivery raised request=%s channel=%s",
+                request.id,
+                config.channel_type.value,
+            )
+            continue
+        dispatch_repo.add_attempt(
+            DispatchAttempt(
+                request_id=request.id,
+                channel_type=config.channel_type,
+                attempt_no=attempt_no,
+                status=result.outcome,
+                provider_response=result.provider_response,
+                idempotency_key=f"dispatch-copy:{request.id}:{config.id}",
+            )
+        )
+        if result.outcome not in _SUCCESS_OUTCOMES:
+            _logger.warning(
+                "duplicate delivery failed request=%s channel=%s outcome=%s",
+                request.id,
+                config.channel_type.value,
+                result.outcome.value,
+            )
 
 
 async def _load_request(session: AsyncSession, request_id: uuid.UUID) -> ServiceRequest | None:

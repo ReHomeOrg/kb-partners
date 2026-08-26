@@ -7,6 +7,7 @@ import uuid
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.channels.enums import ChannelRole
 from api.channels.models import (
     DispatchAttempt,
     InboundEvent,
@@ -42,12 +43,32 @@ class DispatchRepository:
         self._session = session
 
     async def active_channels_for(self, collaborator_id: str) -> list[PartnerChannelConfig]:
-        """Активные каналы партнёра по приоритету (§9.3)."""
+        """Активные ОСНОВНЫЕ каналы партнёра по приоритету (§9.3).
+
+        Каналы-копии (`role=DUPLICATE`, ADR-0006) в переборе фолбэка не участвуют: они
+        не «запасной вариант», а дополнительная доставка после успешной основной. Иначе
+        копия могла бы стать единственной доставкой — партнёр получил бы письмо вместо
+        заявки в CRM, а диспетч счёл бы это успехом.
+        """
         stmt = (
             select(PartnerChannelConfig)
             .where(
                 PartnerChannelConfig.collaborator_id == collaborator_id,
                 PartnerChannelConfig.is_active.is_(True),
+                PartnerChannelConfig.role == ChannelRole.PRIMARY,
+            )
+            .order_by(PartnerChannelConfig.priority.asc())
+        )
+        return list((await self._session.execute(stmt)).scalars().all())
+
+    async def duplicate_channels_for(self, collaborator_id: str) -> list[PartnerChannelConfig]:
+        """Активные каналы-копии партнёра (ADR-0006), в порядке приоритета."""
+        stmt = (
+            select(PartnerChannelConfig)
+            .where(
+                PartnerChannelConfig.collaborator_id == collaborator_id,
+                PartnerChannelConfig.is_active.is_(True),
+                PartnerChannelConfig.role == ChannelRole.DUPLICATE,
             )
             .order_by(PartnerChannelConfig.priority.asc())
         )

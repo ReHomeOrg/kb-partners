@@ -9,7 +9,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from api.channels.enums import ChannelType
+from api.channels.enums import ChannelRole, ChannelType
 
 _MAX_ID = 255
 
@@ -22,6 +22,9 @@ class ChannelConfigCreate(BaseModel):
     collaborator_id: str = Field(min_length=1, max_length=_MAX_ID)
     channel_type: ChannelType
     priority: int = Field(default=100, ge=0)
+    # Роль ортогональна приоритету: priority — порядок перебора внутри основных
+    # каналов, role — участвует ли канал в переборе вообще (ADR-0006).
+    role: ChannelRole = ChannelRole.PRIMARY
     config: dict[str, Any] = Field(default_factory=dict)
     inbound_token: str | None = Field(default=None, max_length=_MAX_ID)
     is_active: bool = True
@@ -33,6 +36,7 @@ class ChannelConfigUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     priority: int | None = Field(default=None, ge=0)
+    role: ChannelRole | None = None
     config: dict[str, Any] | None = None
     inbound_token: str | None = Field(default=None, max_length=_MAX_ID)
     is_active: bool | None = None
@@ -75,6 +79,7 @@ class ChannelConfigRead(BaseModel):
     collaborator_id: str
     channel_type: ChannelType
     priority: int
+    role: ChannelRole
     config: dict[str, Any]
     is_active: bool
     health: dict[str, Any] | None
